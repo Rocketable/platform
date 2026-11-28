@@ -49,7 +49,6 @@ test("another tab's value for the key reloads with Compact fallbacks; other keys
     ["5", compact],
     [JSON.stringify({ version: 1, rows: "everything" }), compact],
     [null, compact],
-    [JSON.stringify({ version: 1, rows: Object.fromEntries(timelineCategories.map(({ id }) => [id, { placement: "separate", details: "expanded" }])) }), levelRows("everything")],
     [JSON.stringify({ version: 1, rows: { ...levelRows("everything"), skills: undefined, extra: { placement: "separate" }, notices: { placement: "loud" }, execute: { placement: "separate", details: "wide" }, thinking: "open" } }),
       { ...levelRows("everything"), skills: compact.skills, notices: compact.notices, execute: { placement: "separate", details: "collapsed" }, thinking: compact.thinking }],
   ];

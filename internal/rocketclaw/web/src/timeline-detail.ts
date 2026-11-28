@@ -64,7 +64,6 @@ function parseRows(value: string | null): TimelineRows {
   return Object.fromEntries(timelineCategories.map(({ id }) => {
     const row = stored[id];
     const placement = placements.includes(row?.placement) ? row!.placement : compact[id].placement;
-    if (!collapsible.has(id)) return [id, { placement }];
     return [id, { placement, details: detailValues.includes(row?.details) ? row!.details : compact[id].details }];
   })) as TimelineRows;
 }

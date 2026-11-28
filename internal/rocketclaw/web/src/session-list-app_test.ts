@@ -344,7 +344,7 @@ export async function appScenario(part: "lists" | "composer") {
           const tx = db.transaction("snapshots", "readwrite");
           tx.oncomplete = () => resolve();
           tx.onabort = () => reject(tx.error);
-          tx.objectStore("snapshots").put({ rows: [{ id: "kept", title: "room", preview: "Huge\n" + "start\0" + "x".repeat(17 * 1024 * 1024) + "\0needle-17mib", agent: "main" }], version: "saved" }, ["alice", "test-protocol"]);
+          tx.objectStore("snapshots").put({ rows: [{ id: "kept", title: "room", preview: "Huge\n" + "start\0" + "x".repeat(17 * 1024 * 1024) + "\0needle-17mib", agent: "main" }], version: "saved" }, ["alice", JSON.stringify(["", "test-protocol"])]);
         });
         db.close();
       });
@@ -926,7 +926,7 @@ export async function appScenario(part: "lists" | "composer") {
       await search.fill("");
       await shown(sessionPalette, "backfilled preview");
       await page.waitForFunction(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts > 0);
-      expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual({ rows: [row("kept", "backfilled preview")], version: "", remote: { servers: {}, agentTags: {} }, tabs: [] });
+      expect(await page.evaluate(snapshot, ["alice", JSON.stringify(["", "test-protocol"])])).toEqual({ rows: [row("kept", "backfilled preview")], version: "", remote: { servers: {}, agentTags: {} }, tabs: [] });
       blocked = Promise.withResolvers();
       await page.reload();
       await openSessions(page);
@@ -981,7 +981,7 @@ export async function appScenario(part: "lists" | "composer") {
       await oldResponse;
       await shown(page, "bob preview");
       await hidden(page, "late alice preview");
-      expect((await page.evaluate(snapshot, ["bob", "test-protocol"])).rows).toEqual([row("gone", "bob preview")]);
+      expect((await page.evaluate(snapshot, ["bob", JSON.stringify(["", "test-protocol"])])).rows).toEqual([row("gone", "bob preview")]);
       await page.reload();
       await openSessions(page);
       await shown(sessionPalette, "bob preview");
@@ -1069,7 +1069,7 @@ export async function appScenario(part: "lists" | "composer") {
           if (failure === "quota") {
             await shown(storagePage, "prior committed preview");
             await storagePage.waitForFunction(() => (window as unknown as { __committed: boolean }).__committed);
-            const prior = await storagePage.evaluate(snapshot, ["bob", ctrl.protocol]);
+            const prior = await storagePage.evaluate(snapshot, ["bob", JSON.stringify(["", ctrl.protocol])]);
             expect(prior.rows).toEqual([row("live-storage-failure", "prior committed preview")]);
             await storagePage.evaluate(() => {
               Object.defineProperty(window, "__quotaFailed", { value: false, writable: true });
@@ -1080,7 +1080,7 @@ export async function appScenario(part: "lists" | "composer") {
             });
             ctrl.yieldBatches = complete([row("live-storage-failure", "live without storage")], "bob");
             await storagePage.waitForFunction(() => (window as unknown as { __quotaFailed: boolean }).__quotaFailed);
-            expect(await storagePage.evaluate(snapshot, ["bob", ctrl.protocol])).toEqual(prior);
+            expect(await storagePage.evaluate(snapshot, ["bob", JSON.stringify(["", ctrl.protocol])])).toEqual(prior);
           }
           await shown(storagePage, "live without storage");
           await storagePage.keyboard.press("Escape");

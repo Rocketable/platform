@@ -780,7 +780,7 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
   const show = (view: string) => page.getByRole("group", { name: "Sidebar view" }).getByRole("button", { name: view, exact: true }).click(), sent = (count: number) => until(() => saved.sent.length === count);
   saved.spaces.push({ id: "ops", name: "Ops" });
-  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/routines"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
+  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/routines"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: "group:work", space: "ops", group: "work" }, { path: href("hotel"), space: "main" }] };
   saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("alpha")}`);
   await tab("Alpha").waitFor();
