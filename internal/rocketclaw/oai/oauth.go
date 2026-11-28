@@ -132,23 +132,11 @@ func readAuthFile(path string) (authFile, error) {
 		return authFile{}, fmt.Errorf("parse OpenAI OAuth token: %w", err)
 	}
 
-	if file.Providers != nil {
-		return file, nil
+	if file.Providers == nil {
+		return authFile{}, fmt.Errorf("parse OpenAI OAuth token: providers must be an object; remove %s and run rocketclaw oai login", path)
 	}
 
-	var fields map[string]json.RawMessage
-
-	_ = json.Unmarshal(data, &fields)
-	if _, ok := fields["providers"]; ok {
-		return authFile{}, errors.New("parse OpenAI OAuth providers: providers must be an object")
-	}
-
-	var token Token
-	if err := json.Unmarshal(data, &token); err != nil {
-		return authFile{}, fmt.Errorf("parse OpenAI OAuth token: %w", err)
-	}
-
-	return authFile{Providers: map[string]Token{"openai": token}}, nil
+	return file, nil
 }
 
 func updateAuthFileIn(workspace, runtimeDir string, create bool, update func(*authFile) (bool, error)) error {
