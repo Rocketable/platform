@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from "react";
 
-// "notices" keeps its stored key; RocketClaw's rows for it are developer instructions.
 export const timelineCategories = [
   { id: "execute", label: "Execute" },
   { id: "thinking", label: "Thinking" },
@@ -13,7 +12,6 @@ export const timelineCategories = [
 export type TimelineCategory = (typeof timelineCategories)[number]["id"];
 export type TimelinePlacement = "separate" | "grouped" | "hidden";
 type TimelineDetails = "collapsed" | "expanded";
-// Only collapsible categories carry details, as in OpenCode's TimelineDetail.
 export type TimelineRows = Record<TimelineCategory, { placement: TimelinePlacement; details?: TimelineDetails }>;
 type TimelineLevel = { id: "messages" | "quiet" | "compact" | "detailed" | "everything"; label: string; description: string; rows: TimelineRows };
 
@@ -22,8 +20,6 @@ const placements: unknown[] = ["separate", "grouped", "hidden"];
 const detailValues: unknown[] = ["collapsed", "expanded"];
 const KEY = "timeline-detail";
 
-// Levels follow OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/detail.ts:
-// Execute stands in for Shell, Skills for Edits with Subagents' values, and Everything also opens every row.
 export const timelineLevels: readonly TimelineLevel[] = [
   { id: "messages", label: "Messages only", description: "Hide all activity.", rows: {
     execute: { placement: "hidden", details: "collapsed" }, thinking: { placement: "hidden", details: "collapsed" },
@@ -56,7 +52,6 @@ export function timelineLevel(rows: TimelineRows) {
   }));
 }
 
-// Details saved for categories that no longer collapse are dropped, so older saved values still match their level.
 function parseRows(value: string | null): TimelineRows {
   let saved: { version?: unknown; rows?: Record<string, { placement?: unknown; details?: unknown } | null> } | null;
   try {
@@ -92,7 +87,6 @@ export function timelineRows() {
 
 export function subscribeTimelineRows(listener: () => void) {
   listeners.add(listener);
-  // The same handler is registered once however many subscribers there are.
   window.addEventListener("storage", onStorage);
   return () => {
     listeners.delete(listener);
@@ -110,10 +104,8 @@ export function setTimelineRows(next: TimelineRows) {
 
 type TimelineItem = { id: string; role: string; text: string; toolName?: string; toolParts?: TimelineItem[]; attachments?: unknown[]; state?: string; codeModeCalls?: { name: string; arguments?: string; status?: string }[] };
 type TimelineGroup<T> = { kind: "group"; key: string; label: string; members: { line: T; open: boolean }[] };
-// OpenCode's timelineCategory sends shell, execute and bash to Shell; RocketClaw's task and skill tools have their own categories.
 const categoryByTool: Partial<Record<string, TimelineCategory>> = { execute: "execute", bash: "execute", task: "subagents", skill: "skills" };
 const categoryByRole: Partial<Record<string, TimelineCategory>> = { thinking: "thinking", developer: "notices" };
-// In-band failures from internal/rocketclaw/harness looper.go and replay.go; "tool call rejected" is the repeat guard.
 export const timelineFailure = /^(tool call (failed|denied|aborted)|subagent task aborted)/;
 
 const navigateTool = "rocketclaw_navigate_for_me";
@@ -132,8 +124,6 @@ export function navigations(line: TimelineItem) {
   });
 }
 
-// Placement follows OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/projection.ts
-// (renderable, toolGroupType, groupContent): replies and separate items end a run of grouped items.
 export function projectTimeline<T extends TimelineItem>(items: T[], rows: TimelineRows) {
   const projected: ({ kind: "line"; line: T; open?: boolean } | TimelineGroup<T>)[] = [];
   const level = timelineLevel(rows)?.id;
@@ -144,7 +134,6 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
       continue;
     }
     const { placement, details } = rows[id];
-    // Categories without a Collapse setting start closed, as OpenCode's do, except at Everything.
     const open = collapsible.has(id) ? details === "expanded" : level === "everything";
     const pinned = [line, ...(line.toolParts ?? [])].some((part) => part.attachments?.length) || navigations(line).length > 0;
     const failed = line.role === "tool" && (line.state === "background" || (level !== "messages" && timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? "")));
