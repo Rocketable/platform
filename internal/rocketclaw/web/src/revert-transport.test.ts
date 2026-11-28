@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 
-// Go's TestRevertRealBackendBrowser owns the live PostgreSQL/provider fixture.
 test("real HTTP Revert commits only retained context and converges across viewers", async () => {
   const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
@@ -12,7 +11,6 @@ test("real HTTP Revert commits only retained context and converges across viewer
     for (const page of [first, second]) page.on("pageerror", (error: Error) => errors.push(error.message));
     await Promise.all([first.goto(`${url}/s/${btoa("chat").replaceAll("=", "")}`), second.goto(`${url}/s/${btoa("chat").replaceAll("=", "")}`)]);
     await second.locator("textarea").fill("Other viewer draft");
-    // Keep Chromium's animation frames active for the viewer receiving pointer actions.
     await first.bringToFront();
     await first.getByRole("button", { name: "Add files", exact: true }).click();
     await first.locator('input[type="file"]').setInputFiles({ name: "old-draft.txt", mimeType: "text/plain", buffer: Buffer.from("replace me") });
@@ -34,7 +32,6 @@ test("real HTTP Revert commits only retained context and converges across viewer
     expect(await first.getByText("Revert unavailable", { exact: true }).count()).toBe(0);
     await first.getByText("boundary-upload.txt", { exact: true }).last().waitFor();
     expect(await first.getByText("old-draft.txt", { exact: true }).count()).toBe(0);
-    // Download through the real authenticated route after staging, not an inline File stub.
     const boundary = await context.request.get(`${url}/api/DownloadAttachment?conversationId=chat&id=boundary-upload`);
     expect(boundary.ok()).toBe(true);
     expect(await boundary.text()).toBe("boundary-upload bytes");
