@@ -1101,7 +1101,7 @@ const savedState = (state: TabState): SavedTabs["state"] => {
   return { tabs, groups: state.groups.filter((group) => tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
 };
 
-type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
+type ClosedTab = SavedTabs["closed"][number];
 const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noLayout: StripLayout = {};
 
 // This person's strip layout, kept by the local server, from the saved tabs its view or its session list fetches.
@@ -4332,7 +4332,7 @@ function codeModeCallRow(call: CodeModeCall, running: boolean) {
   } catch {
     // Clipped arguments are no longer JSON and show as sent.
   }
-  const denied = call.status === "denied" || call.outcome === "deny";
+  const denied = call.status === "denied";
   const status: TraceStatus | undefined = denied || call.status === "error" ? "error" : call.status === "running" && running ? "running" : undefined;
   return { command, status, title: `${call.name} · ${command.replace(/\s+/g, " ").slice(0, 120)}`,
     description: denied ? "denied" : call.status === "error" ? "failed" : call.status === "cancelled" ? "cancelled" : undefined };
@@ -4950,10 +4950,9 @@ async function openCall(draft: ComposerDraft, onDraftChange: () => void, scrollT
 }
 
 function historyLines(messages: TranscriptEvent[]): Line[] {
-  const seen = new Map<string, number>();
   return messages.map((message) => {
     const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-    return { ...message, id: message.inputId || message.itemId || message.messageId || lineId(role, message.text, seen), role };
+    return { ...message, id: message.inputId || message.itemId, role };
   });
 }
 
