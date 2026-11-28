@@ -17,17 +17,17 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   const hash = new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex");
   expect(await call("Protocol")).toEqual({ protoSha256: hash });
   expect(await call("Identity")).toEqual({ username: "alice", principal: "alice", sandboxError: "" });
-  const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
+  const batches = await Array.fromAsync(listSessions(`${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions ?? []).map((session) => session.id)).toEqual(["empty-web", id]);
   expect([batches[0], batches.at(-1)]).toEqual([{ owner: "alice" }, { upstreamSuccess: true, version: expect.any(String) }]);
   const version = batches.at(-1)!.version!;
-  const since = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions?${new URLSearchParams({ since: version })}`));
+  const since = await Array.fromAsync(listSessions(`${url}/api/ListSessions?${new URLSearchParams({ since: version })}`));
   expect(since.flatMap((batch) => batch.sessions ?? [])).toEqual([]);
   expect(since.at(-1)).toEqual({ upstreamSuccess: true, version: expect.not.stringMatching(version), since: version });
   const original = batches.flatMap((batch) => batch.sessions ?? []).find((session) => session.id === id)!;
   for (const name of [" Launch ", ""]) {
     await call("UpdateSession", { id, name });
-    const updated: Session[] = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
+    const updated: Session[] = (await Array.fromAsync(listSessions(`${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
     const session = updated.find((session) => session.id === id)!;
     expect(session.preview).toBe(original.preview);
     expect(session.updatedAt).toBe(original.updatedAt);
@@ -35,7 +35,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   }
   for (const paused of [true, false]) {
     await call("UpdateSession", { id: "empty-web", paused });
-    const listed = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
+    const listed = (await Array.fromAsync(listSessions(`${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
     const session = listed.find((row) => row.id === "empty-web");
     expect([session?.pausable, session?.paused]).toEqual([true, paused || undefined]);
   }

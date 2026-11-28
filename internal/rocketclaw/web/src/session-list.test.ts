@@ -115,7 +115,7 @@ describe("session list reconciliation", () => {
       yield { sessions: [{ id: "b" }] };
       yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/routines/a", unreadAt: "1" }] };
     }
-    const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, undefined, (remote) => remotes.push(remote));
+    const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, new AbortController().signal, (remote) => remotes.push(remote));
     expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/routines/a", unreadAt: "1" }], tabRevision: "7", navigate: "/routines" });
     expect(remotes).toHaveLength(1);
   });
@@ -134,6 +134,8 @@ describe("session list reconciliation", () => {
       batchesOf([alice([{ id: "new", preview: "fresh" }]), alice([{ id: "new", preview: "fresh" }], { owner: "bob", upstreamSuccess: true })]),
       () => prior,
       (rows) => seen.push(rows),
+      new AbortController().signal,
+      () => {},
     );
     expect(seen).toEqual([[{ id: "new", preview: "fresh" }, { id: "old", preview: "keep" }]]);
     expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], complete: false, mismatch: true, remote: { servers: {}, agentTags: {} } });
@@ -143,19 +145,17 @@ describe("session list reconciliation", () => {
       yield alice([{ id: "one" }], { upstreamSuccess: true });
       throw new Error("cut");
     }
-    const failed = await readSessionEnumeration("alice", lateFailure(), () => [], () => {});
+    const failed = await readSessionEnumeration("alice", lateFailure(), () => [], () => {}, new AbortController().signal, () => {});
     expect(failed.complete).toBe(false);
 
     const denied = new RPCError("denied", 16);
-    for (const batches of [Promise.reject(denied), (async function* () { yield alice([{ id: "prefix" }]); throw denied; })()]) {
-      const rejected = await readSessionEnumeration("alice", batches, () => prior, () => {});
-      expect(rejected.mismatch).toBe(true);
-      expect(rejected.complete).toBe(false);
-    }
+    const rejected = await readSessionEnumeration("alice", (async function* () { yield alice([{ id: "prefix" }]); throw denied; })(), () => prior, () => {}, new AbortController().signal, () => {});
+    expect(rejected.mismatch).toBe(true);
+    expect(rejected.complete).toBe(false);
   });
 
   test("empty successful exhaustion is committable", async () => {
-    const result = await readSessionEnumeration("alice", batchesOf([alice([], { upstreamSuccess: true })]), () => [{ id: "old" }], () => {});
+    const result = await readSessionEnumeration("alice", batchesOf([alice([], { upstreamSuccess: true })]), () => [{ id: "old" }], () => {}, new AbortController().signal, () => {});
     expect(result.received).toEqual([]);
     expect(result.complete).toBe(true);
   });
@@ -182,7 +182,7 @@ describe("session list reconciliation", () => {
       baseline = merged;
       publications += 1;
       if (merged.length === rows.length + 1) published.resolve();
-    });
+    }, new AbortController().signal, () => {});
     await consumed.promise;
     baseline = [...baseline, { id: "saved", preview: "keep" }];
     try {
@@ -208,7 +208,7 @@ describe("session list reconciliation", () => {
         if (ending === "mismatch") yield alice([{ id: "foreign" }], { owner: "bob" });
         else throw new Error("cut");
       }
-      const result = await readSessionEnumeration("alice", stream(), () => [], (rows) => seen.push(rows), ac.signal);
+      const result = await readSessionEnumeration("alice", stream(), () => [], (rows) => seen.push(rows), ac.signal, () => {});
       expect(seen).toEqual(ending === "error" ? [[{ id: "first" }], [{ id: "first" }, { id: "pending" }]] : [[{ id: "first" }]]);
       expect(result.received).toEqual([{ id: "first" }, { id: "pending" }]);
       expect(result.complete).toBe(false);

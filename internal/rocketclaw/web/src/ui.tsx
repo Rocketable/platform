@@ -721,7 +721,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
       if (ac.signal.aborted || captured !== gen.current) return;
       const viewing = document.hasFocus() && server() === name ? pagePath() : "";
       const held = listing.current, keepMark = viewing && sessionStorage.getItem(heldUnread) === rowKey(viewing, name) ? [["hold", ""]] : [];
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `${serverURL(name)}/api/ListSessions?${new URLSearchParams([["viewing", viewing], ["since", held.version], ...keepMark])}`)), () => rowsRef.current, (merged) => {
+      readSessionEnumeration(currentOwner, listSessions(`${serverURL(name)}/api/ListSessions?${new URLSearchParams([["viewing", viewing], ["since", held.version], ...keepMark])}`, ac.signal), () => rowsRef.current, (merged) => {
         // Only changed rows arrive since a held version; they show in place once the listing completes.
         if (ac.signal.aborted || captured !== gen.current || held.version) {
           return;
@@ -1113,8 +1113,8 @@ type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
 const noShared: SavedTabs["shared"] = [], noClosed: ClosedTab[] = [], noLayout: StripLayout = {};
 
 // This person's strip layout, kept by the local server, from the saved tabs its view or its session list fetches.
-function useLayout(): [StripLayout, (change: (layout: StripLayout) => StripLayout) => void] {
-  return [useLocalTabs()?.layout ?? noLayout, saveLayout];
+function useLayout() {
+  return useLocalTabs()?.layout ?? noLayout;
 }
 
 function useLocalTabs() {
@@ -2024,7 +2024,7 @@ function ServerScope({ tabs, children }: { tabs: TabStoreValue; children: ReactN
 // Shift+Arrow on it, moves it there, and a card not yet placed comes last, in its server's order. A server whose tabs
 // have not arrived says why instead, and its cards keep their places.
 function Cards({ stores, newChat }: { stores: TabStoreValue[]; newChat: () => void }) {
-  const waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server))), [layout] = useLayout(), titled = stores.length > 1, node = useRef<HTMLDivElement>(null);
+  const waiting = new Set(useWaiting().map((mark) => rowKey(mark.path, mark.server))), layout = useLayout(), titled = stores.length > 1, node = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<CardMenu & { server: string }>(), [editing, setEditing] = useState<{ server: string; key: string }>(), [renaming, setRenaming] = useState<{ server: string; space: string }>();
   const [picked, setPicked] = useState<Picked>({ at: "", card: "", paths: new Set() }), focusing = useRef("");
   const loaded = stores.filter((tabs) => tabs.viewed || tabs.state.owner !== undefined), order = layout.order ?? [];
@@ -2078,14 +2078,12 @@ function ServerStatus({ name }: { name: string }) {
   return <p role="status" className="mx-2 my-1 text-xs text-muted-foreground">{status.text || `${serverLabel(name)}: Loading…`}</p>;
 }
 
-const cardClass = (current: boolean) => cn("mx-1 mt-1 flex shrink-0 flex-col rounded-lg border p-0.5", current ? "border-primary/20 bg-accent/50 shadow-sm" : "bg-muted/40");
-
 // Every card is headed alike: its title, which folds it, with a folder open while it is unfolded, its name and, with
 // more than one server, its server, which narrows first, "offline" while that server does not answer, a spinner while a
 // turn runs in it, and a count of its tabs waiting for this person; then Needs you while one asks, and its actions.
 // Dragging the heading, or Shift+Arrow on the title, moves the card.
-function CardHeading({ cardKey, icon, name, server, current, title, count, asking, running, folded, onFold, move, children }: { cardKey: string; icon: [typeof Folder, typeof Folder]; name: string; server: string; current?: boolean; title?: ReactNode; count: number; asking: boolean; running: boolean; folded: boolean; onFold: () => void; move: (step: number) => void; children?: ReactNode }) {
-  const { offline } = useContext(Sidebar), Icon = icon[folded ? 1 : 0];
+function CardHeading({ cardKey, name, server, current, title, count, asking, running, folded, onFold, move, children }: { cardKey: string; name: string; server: string; current: boolean; title?: ReactNode; count: number; asking: boolean; running: boolean; folded: boolean; onFold: () => void; move: (step: number) => void; children?: ReactNode }) {
+  const { offline } = useContext(Sidebar), Icon = folded ? Folder : FolderOpen;
   const description = [count && `${count} waiting`, running && "Turn running", offline && "Server offline"].filter(Boolean).join(", ");
   return <div draggable={!title} className="flex shrink-0 items-center gap-0.5" onDragStart={(event) => { dragging = `card:${cardKey}`; event.dataTransfer.setData("application/x-rocketclaw-card", cardKey); }} onDragEnd={() => { dragging = ""; }}>
     {title ?? <button type="button" aria-expanded={!folded} aria-label={server ? `${name} · ${server}` : name} aria-current={current || undefined} aria-description={description} className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-[13px] hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={onFold}
@@ -2113,8 +2111,8 @@ function SpaceCard({ space, ...card }: Card & { space: Space }) {
   const strip = tabs.stripOf(space.id), shared = tabs.sharedIn(space.id), { unread, asking, running } = cardWork(tabs.name, [...shared, ...strip.flatMap((tab) => isKeeper(tab) ? [] : [tab.path])], rows, waiting);
   const folded = folds[key] ?? false, listed = folded ? strip.filter((tab) => tab.path === tabs.pathname) : strip;
   const current = tabs.viewed && space.id === tabs.state.space;
-  return <div data-card-key={key} className={cardClass(current)}>
-    <CardHeading cardKey={key} icon={[FolderOpen, Folder]} name={space.name} server={label} current={current} count={unread.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)}
+  return <div data-card-key={key} className={cn("mx-1 mt-1 flex shrink-0 flex-col rounded-lg border p-0.5", current ? "border-primary/20 bg-accent/50 shadow-sm" : "bg-muted/40")}>
+    <CardHeading cardKey={key} name={space.name} server={label} current={current} count={unread.size} asking={asking} running={running} folded={folded} onFold={() => foldCard(key, !folded)} move={(step) => move(key, step)}
       title={renaming === space.id ? <SpaceName name={space.name} rename={(value) => tabs.renameSpace(space.id, value)} done={() => setRenaming(undefined)} /> : undefined}>
       <SpaceActions tabs={tabs} space={space} label={`${space.name} space actions${label && ` on ${label}`}`} renaming={renaming === space.id} rename={setRenaming} />
     </CardHeading>
@@ -2340,11 +2338,10 @@ function GroupEditor({ tabs, node }: { tabs: TabStoreValue; node: RefObject<HTML
   </Popover.Root>;
 }
 
-type ParkedRow = Tab & { shared?: boolean };
 type ListMenu = CardMenu & { server: string };
 const parkedPaths = (view: Pick<SidebarView, "rows" | "marks">) => new Set([...view.rows.flatMap((row) => row.parked ? [rowPath(row)] : []), ...(view.marks ?? []).flatMap((mark) => mark.parked ? [mark.path] : [])]);
-const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string>): ParkedRow[] =>
-  [...tabs.filter((tab) => parked.has(tab.path)), ...shared.flatMap((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path) ? [{ ...tab, shared: true }] : [])];
+const parkedRows = (tabs: Tab[], shared: SavedTabs["shared"], parked: Set<string>) =>
+  [...tabs.filter((tab) => parked.has(tab.path)), ...shared.filter((tab) => parked.has(tab.path) && !tabs.some((own) => own.path === tab.path))];
 
 function ListMenuPopup({ tabs, menu, setMenu, list, setEditing }: { tabs: TabStoreValue; menu?: ListMenu; setMenu: (menu?: ListMenu) => void; list: RefObject<HTMLDivElement | null>; setEditing: (path: string) => void }) {
   const sidebar = useContext(Sidebar), { setCommand } = useContext(SessionCommands);

@@ -14,7 +14,7 @@ test("first Go row and composer choices arrive before the blocked tail", async (
   try {
     expect(await call("Identity")).toEqual({ username: "alice", principal: "alice", sandboxError: "" });
     expect(await call("Protocol")).toEqual({ protoSha256: new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex") });
-    const iterator = listSessions(abort.signal, `${url}/api/ListSessions`);
+    const iterator = listSessions(`${url}/api/ListSessions`, abort.signal);
     expect(await iterator.next()).toEqual({ done: false, value: { owner: "alice" } });
     expect(await iterator.next()).toEqual({ done: false, value: {
       sessions: [expect.objectContaining({ id: "slack-thread:C1:1.1", title: "C1", agent: "main", updatedAt: "1970-01-01T00:00:02.123456Z" })],

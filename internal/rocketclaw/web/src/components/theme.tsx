@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export const PALETTE_KEY = "palette";
@@ -67,7 +67,6 @@ export function setThemeMode(mode: Mode) {
 export function useTheme() {
   useEffect(() => {
     apply(storedMode());
-    applyPalette(document.documentElement, parsePalette(localStorage.getItem(PALETTE_KEY)));
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => apply(storedMode());
     mq.addEventListener("change", onChange);
@@ -75,13 +74,13 @@ export function useTheme() {
   }, []);
 }
 
-function subscribeMode(listener: () => void) {
+function subscribeTheme(listener: () => void) {
   window.addEventListener("themechange", listener);
   return () => window.removeEventListener("themechange", listener);
 }
 
 export function ThemeModeChooser() {
-  const mode = useSyncExternalStore(subscribeMode, storedMode, () => "system" as const);
+  const mode = useSyncExternalStore(subscribeTheme, storedMode, () => "system" as const);
   return (
     <Select items={modeItems} value={mode} onValueChange={(value) => { if (value) setThemeMode(value); }}>
       <SelectTrigger aria-label="Light or dark theme" className="min-w-40">
@@ -98,22 +97,19 @@ export function ThemeModeChooser() {
   );
 }
 
+const storedPalette = () => parsePalette(localStorage.getItem(PALETTE_KEY));
+
 export function PaletteChooser() {
-  const [palette, setPalette] = useState<Palette>("neutral");
-  useEffect(() => {
-    const stored = parsePalette(localStorage.getItem(PALETTE_KEY));
-    setPalette(stored);
-    applyPalette(document.documentElement, stored);
-  }, []);
+  const palette = useSyncExternalStore(subscribeTheme, storedPalette, () => "neutral" as const);
   return (
     <Select
       items={paletteItems}
       value={palette}
       onValueChange={(value) => {
         if (!isPalette(value)) return;
-        setPalette(value);
         localStorage.setItem(PALETTE_KEY, value);
         applyPalette(document.documentElement, value);
+        window.dispatchEvent(new Event("themechange"));
       }}
     >
       <SelectTrigger aria-label="Color theme" className="min-w-40">
