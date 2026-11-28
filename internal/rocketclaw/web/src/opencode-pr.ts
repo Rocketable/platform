@@ -8,13 +8,10 @@ async function call<T>(url: string, signal: AbortSignal | undefined, init?: Requ
   return response.status === 204 ? undefined as T : (await response.json() as { data: T }).data;
 }
 
-// Use OpenCode's standalone shell API, never session.prompt or session.shell: discovery must not add a turn.
-// Contract: internal/rocketclaw/oc/packages/protocol/src/groups/shell.ts (upstream packages/protocol/src/groups/shell.ts).
 async function run(source: OpenCodePRSource, command: string, signal: AbortSignal) {
   signal.throwIfAborted();
   const query = new URLSearchParams({ "location[directory]": source.directory, "pull-request-discovery": "1" });
   const base = `${source.api}/shell`;
-  // Await the creation response even if the view leaves, so the command can always be removed by ID.
   let shell = await call<Shell>(`${base}?${query}`, undefined, { method: "POST", body: JSON.stringify({ command: `GH_PROMPT_DISABLED=1 ${command}`, cwd: source.directory }) });
   const url = `${base}/${encodeURIComponent(shell.id)}`;
   try {
@@ -30,7 +27,6 @@ async function run(source: OpenCodePRSource, command: string, signal: AbortSigna
     } while (cursor < size);
     return { exit: shell.exit, output };
   } finally {
-    // DELETE also terminates a lookup cancelled while running and removes its captured output.
     await call<void>(`${url}?${query}`, undefined, { method: "DELETE" });
   }
 }
@@ -42,7 +38,6 @@ export async function discoverOpenCodePR(api: string, sessionID: string, signal:
   });
   const source = { api, directory: session.location.directory };
   try {
-    // jj leaves Git on a detached HEAD, which gh cannot name, so pass the nearest jj bookmark; on a Git branch the substitution is empty.
     const result = await run(source, `gh pr view $(git symbolic-ref -q HEAD >/dev/null || jj log --ignore-working-copy --no-graph -r 'latest(heads(::@ & bookmarks()))' -T 'local_bookmarks.map(|b| b.name()).join("\\n")' 2>/dev/null | head -n1) --json url,headRefName,closedAt,mergedAt`, signal);
     if (result.exit !== 0) {
       if (/^(?:no pull requests found for branch |failed to run git: fatal: not a git repository \(or any of the parent directories\)|could not determine current branch: failed to run git: not on any branch)/m.test(result.output)) return { ...source, url: null, branch: "" };
