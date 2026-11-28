@@ -164,15 +164,6 @@ func (r *CodeModeCall) String() string {
 	return text
 }
 
-func (r *CodeModeCall) PullRequests() (created, mentioned []string) {
-	var bash bashParams
-	if len(r.CreatedPullRequests)+len(r.MentionedPullRequests) > 0 || r.Name != "bash" || r.Status != codeModeCallOK || !strings.Contains(r.Summary, "https://github.com/") || json.Unmarshal([]byte(r.Arguments), &bash) != nil {
-		return r.CreatedPullRequests, r.MentionedPullRequests
-	}
-
-	return PullRequestsIn(bash.Command, r.Summary)
-}
-
 func codeModeCallRecord(ctx context.Context, name string, raw json.RawMessage) CodeModeCall {
 	tc, _ := toolCallContextFrom(ctx)
 

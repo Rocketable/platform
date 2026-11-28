@@ -810,8 +810,7 @@ func (e *TranscriptEvent) codeModeCall(call *harness.CodeModeCall, reviewTurn st
 	case call.Name == "":
 		e.ScriptReason, e.ScriptOutcome, e.ReviewTurn = call.Reason, string(call.Outcome), reviewTurn
 	case len(e.CodeModeCalls) < harness.MaxCodeModeCalls:
-		created, mentioned := call.PullRequests()
-		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Status: string(call.Status), Summary: call.Summary, Outcome: string(call.Outcome), Reason: call.Reason, ReviewTurn: reviewTurn, CreatedPullRequests: created, MentionedPullRequests: mentioned})
+		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Status: string(call.Status), Summary: call.Summary, Outcome: string(call.Outcome), Reason: call.Reason, ReviewTurn: reviewTurn, CreatedPullRequests: call.CreatedPullRequests, MentionedPullRequests: call.MentionedPullRequests})
 	}
 }
 
