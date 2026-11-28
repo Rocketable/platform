@@ -1422,7 +1422,9 @@ Pins and names are shared with everyone who can see the session and persist
 across reloads and devices.
 Remote OpenCode names sync both ways: renaming here updates OpenCode, a blank name
 or **Regenerate title** asks OpenCode to generate a new title, and a title changed
-in OpenCode appears here on the next sync.
+in OpenCode appears here on the next sync. With `title_decision_model` set, a remote
+session's title is checked every fourth message as well, when the turn ends on its
+server; a title from OpenCode counts as generated, and a name typed here is never checked.
 A failed OpenCode update leaves the local name unchanged.
 
 The Routines page shows one line per routine, named `<agent> · <schedule>` such as

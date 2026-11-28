@@ -4144,7 +4144,7 @@ func TestEveryFourthWebMessageChecksTheSessionTitle(t *testing.T) {
 	}
 
 	require.Empty(t, decisions, "the first three messages do not check the title")
-	_, _, err := nt.service.NameGenerated(t.Context(), nt.conversationID, "Worktree setup", false)
+	_, _, err := nt.service.NameGenerated(t.Context(), nt.conversationID, "Worktree setup", nil)
 	require.NoError(t, err)
 
 	send("now fix the discombobulation")

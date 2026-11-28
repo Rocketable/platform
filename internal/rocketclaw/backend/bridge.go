@@ -2594,7 +2594,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 				title, err := harness.GenerateTitle(ctx, resolver, runtimeCfg.TitleModel, request, "")
 				if err == nil {
-					_, _, err = b.config.SessionService.NameGenerated(ctx, b.config.ConversationID, title, false)
+					_, _, err = b.config.SessionService.NameGenerated(ctx, b.config.ConversationID, title, new(""))
 				}
 
 				if err != nil {
@@ -2607,7 +2607,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 				b.log.Warn("read the conversation to check its title", "conversation_id", b.config.ConversationID, "error", err)
 			case (people+1)%titleCheckEvery == 0:
 				b.titles.Go(func() {
-					if err := b.retitle(ctx, runtimeCfg, rocketcodeConfig.Observability, rocketcodeConfig.Deciders, resolver, cmp.Or(first, request), recent+"User: "+request); err != nil {
+					if err := b.config.SessionService.retitle(ctx, runtimeCfg, resolver, b.config.ConversationID, cmp.Or(first, request), recent+"User: "+request); err != nil {
 						b.log.Warn("check whether the session title still fits", "conversation_id", b.config.ConversationID, "error", err)
 					}
 				})
@@ -3635,17 +3635,17 @@ func titleConversation(observed []ObservedSessionEntry) (first, recent string, p
 	return first, transcript.String(), people, nil
 }
 
-func (b *Bridge) retitle(ctx context.Context, runtimeCfg *config.Config, observability harness.ObservabilityConfig, deciders map[string]harness.Decider, resolver harness.ModelResolver, request, recent string) error {
+func (s *SessionService) retitle(ctx context.Context, runtimeCfg *config.Config, resolver harness.ModelResolver, conversationID, request, recent string) error {
 	var name string
 
-	found, err := scanFound("read generated session name", b.config.SessionService.db.QueryRowContext(ctx, `SELECT name FROM conversations WHERE conversation_id = $1 AND (name = '' OR name = generated_name)`, b.config.ConversationID).Scan(&name))
+	found, err := scanFound("read generated session name", s.db.QueryRowContext(ctx, `SELECT name FROM conversations WHERE conversation_id = $1 AND (name = '' OR name = generated_name)`, conversationID).Scan(&name))
 	if err != nil || !found {
 		return err
 	}
 
-	name, _, _ = strings.Cut(name, " (was ")
+	shown, _, _ := strings.Cut(name, " (was ")
 
-	fits, err := harness.TitleFits(ctx, observability, deciders, runtimeCfg.TitleDecisionModel, name, request, recent)
+	fits, err := harness.TitleFits(ctx, harness.ObservabilityConfig{Enabled: runtimeCfg.PostHog.ProjectToken != "", Tracer: otel.Tracer("rocketcode")}, newDeciders(runtimeCfg), runtimeCfg.TitleDecisionModel, shown, request, recent)
 	if err != nil {
 		return fmt.Errorf("judge session title: %w", err)
 	}
@@ -3659,7 +3659,7 @@ func (b *Bridge) retitle(ctx context.Context, runtimeCfg *config.Config, observa
 		return fmt.Errorf("regenerate session title: %w", err)
 	}
 
-	_, _, err = b.config.SessionService.NameGenerated(ctx, b.config.ConversationID, title, false)
+	_, _, err = s.NameGenerated(ctx, conversationID, title, &name)
 
 	return err
 }
