@@ -46,9 +46,9 @@ the view recovering by itself. The fake server was rescuing it:
 2. The client aborts a stream that receives no bytes for `defaultIdleTimeout`, 45 seconds (`touch` in `connect`, same
    file). `createClientConnection` in `internal/rocketclaw/oc/packages/app/src/runtime/server/client.tsx` passes no
    `idleTimeout`, so the view uses 45 seconds.
-3. The fake server's `stream()` in `internal/rocketclaw/oc/host/test/server.ts` sends one `server.connected` event
-   and then nothing. So with the fake, the watchdog aborts the stream every 45 seconds with "Event stream stalled",
-   and the client reconnects.
+3. The fake server's `stream()` in `internal/rocketclaw/oc/host/test/server.ts` sent one `server.connected` event
+   and then nothing. So with the fake, the watchdog aborted the stream every 45 seconds with "Event stream stalled",
+   and the client reconnected. The fake now sends a keepalive comment every 15 seconds, like the real server.
 4. A reconnect looks like a network recovery to the view. While the connection is not `connected`, `data.ts`
    invalidates every loaded resource (the `createEffect` that calls `sync.invalidate()` in
    `internal/rocketclaw/oc/packages/client/src/solid/data.ts`). When it is `connected` again, session resolution
@@ -62,9 +62,11 @@ the session empty for more than 2 minutes.
 
 ## Guidance
 
-**Treat the fake's silent event stream as a hidden 45-second retry.** Any test or probe that runs longer than
-45 seconds against `internal/rocketclaw/oc/host/test/server.ts` gets a free reconnect and reload of every session it shows. A result seen
-after that point says nothing about how the code behaves against a real server.
+**Treat any event stream without keepalives as a hidden 45-second retry.** A test or probe that runs longer than
+45 seconds against such a stream gets a free reconnect and reload of every session it shows. A result seen after
+that point says nothing about how the code behaves against a real server. The shared fake in
+`internal/rocketclaw/oc/host/test/server.ts` sends keepalives, so keep them when changing its `stream()`, and give
+any event stream a probe serves itself the same keepalive.
 
 **To show that something stays stuck, or recovers without a reconnect, do one of these:**
 
@@ -82,10 +84,9 @@ its 8-second time limit.
 **Prove a recovery test with a mutation check.** Remove the retry, and confirm the test fails. A test the reconnect
 can rescue passes with the retry removed.
 
-**Recommended follow-up, not done here:** give the fake server's `/event` stream a keepalive comment on a timer, like
-the real server's. Then no host or browser test gets the free reconnect. This is a change to a shared test fixture.
-Turning it on may show tests that pass today only because of the reconnect. Each of those then needs its own
-look.
+**The fake server's `/event` stream now writes `: heartbeat` every 15 seconds** and stops the timer when the stream
+closes, so no host or browser test that uses it gets the free reconnect. When the keepalive was added, every host
+test and `internal/rocketclaw/web/src/opencode.browser.test.ts` still passed.
 
 ## Why This Matters
 
@@ -105,7 +106,7 @@ that could warn the next reader. So the trap is invisible from the current tree.
 
 ## Examples
 
-The fake server's stream today: one event, then silence until the client aborts.
+The fake server's stream before it gained a keepalive: one event, then silence until the client aborts.
 
 ```ts
 start(controller) {
