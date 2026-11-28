@@ -5,8 +5,6 @@ import type { HistoryView } from "./types";
 
 const unreadable = "Could not read this thread's pull requests.";
 
-// Keeps every PR seen with its last known head commit. Only a PR not seen before or a head that moved is a change, so
-// the first look, a PR missing from one look, and a head that could not be read never are.
 export function changedPR(seen: Map<string, string | undefined> | undefined, heads: [string, string | undefined][]) {
   const next = new Map(seen);
   for (const [url, head] of heads) next.set(url, head ?? seen?.get(url));
