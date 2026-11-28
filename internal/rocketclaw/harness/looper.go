@@ -2248,10 +2248,8 @@ func compactionReplayInput(id, encryptedContent, content string) responses.Respo
 }
 
 func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
-	raw, _ := json.Marshal(compaction)
-	texts, _ := compactionText(raw)
-
-	if content := strings.TrimSpace(strings.Join(texts, "\n")); content != "" {
+	content, _ := compaction.ExtraFields()["content"].(string)
+	if content = strings.TrimSpace(content); content != "" {
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
 	}
 

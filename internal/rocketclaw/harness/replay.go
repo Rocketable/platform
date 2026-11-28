@@ -168,10 +168,8 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 
 		if item.OfCompaction != nil {
 			var stored struct {
-				Content *string          `json:"content"`
-				Summary *json.RawMessage `json:"summary"`
-				Recent  *json.RawMessage `json:"recent"`
-				Kept    *int             `json:"kept"`
+				Content *string `json:"content"`
+				Kept    *int    `json:"kept"`
 			}
 			if err := json.Unmarshal(raw[i], &stored); err != nil {
 				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: ReplayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
@@ -180,14 +178,6 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			extra := map[string]any{}
 			if stored.Content != nil {
 				extra["content"] = *stored.Content
-			}
-
-			if stored.Summary != nil {
-				extra["summary"] = *stored.Summary
-			}
-
-			if stored.Recent != nil {
-				extra["recent"] = *stored.Recent
 			}
 
 			if stored.Kept != nil {
