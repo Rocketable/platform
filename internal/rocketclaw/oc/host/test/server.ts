@@ -100,19 +100,23 @@ const json = (body: unknown, status = 200) => Response.json(body, { status })
 
 function stream(signal: AbortSignal | null | undefined) {
   let open = true
+  let keepalive: ReturnType<typeof setInterval>
   server.streams++
 
   const close = () => {
     if (!open) return
     open = false
+    clearInterval(keepalive)
     server.streams--
   }
 
   return new Response(
     new ReadableStream({
       start(controller) {
+        const encoder = new TextEncoder()
         const event = { type: "server.connected", id: "evt_1", created: 0, data: {} }
-        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+        keepalive = setInterval(() => controller.enqueue(encoder.encode(": heartbeat\n\n")), 15_000)
         signal?.addEventListener("abort", () => {
           close()
           controller.error(signal.reason)
