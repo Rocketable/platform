@@ -30,7 +30,6 @@ function useThreadPRs(id: string, version?: string, initial = "") {
   const { api, directory } = checkout.data ?? {};
   const source = useMemo(() => api === undefined ? undefined : { api, directory: directory! }, [api, directory]);
   const loading = found.isFetching || remote && checkout.isFetching;
-  // Only the first look shows a status; later looks keep the current result in place so the pane does not jump.
   const finding = found.isPending || remote && checkout.isPending;
   return { found, checkout, remote, urls, mentioned, url, checkoutOnly, issue, reference, source, loading, finding, setSelected };
 }
