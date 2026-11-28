@@ -5,8 +5,6 @@ import { API } from "typescript/unstable/async";
 import type { StringLiteral } from "typescript/unstable/ast";
 import { isFunctionDeclaration, isImportDeclaration } from "typescript/unstable/ast/is";
 
-// Behavior reference: OpenCode 048a47e89e859f9928f5f04a56eebf013063152a,
-// packages/session-ui/src/message/message-content.tsx, CurrentUserMessageDisplay and AssistantTextContent.
 const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
