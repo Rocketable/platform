@@ -1037,7 +1037,7 @@ DELETE FROM steps s USING done d WHERE s.conversation_id = $1 AND (d.takes_lane 
 	}
 
 	if _, err := tx.ExecContext(ctx, `WITH retained AS (
-SELECT concat(message, content::text, inbound_json::text, outbound_json::text) AS payload FROM turns WHERE conversation_id = ANY($1) AND phase <> 'done' AND takes_lane
+SELECT concat(message, inbound_json::text, outbound_json::text) AS payload FROM turns WHERE conversation_id = ANY($1) AND phase <> 'done' AND takes_lane
 UNION ALL SELECT s.value::text FROM steps s JOIN turns a ON a.conversation_id = s.conversation_id
     AND (s.key = a.id OR starts_with(s.key, a.id || '/')) WHERE a.conversation_id = ANY($1) AND a.phase NOT IN ('waiting', 'done')
 UNION ALL SELECT f.id FROM attachments f JOIN turns a ON a.id = f.turn_id WHERE f.conversation_id = ANY($1) AND a.phase NOT IN ('waiting', 'done')
@@ -1574,7 +1574,7 @@ UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continu
 	if c.kind == pruneSticky {
 		if _, err := execState(ctx, tx, "enqueue expired sticky attachments", `WITH payloads AS NOT MATERIALIZED (
     SELECT entry_json::text AS payload, NULL AS turn, entry_timestamp < $2 AS expired FROM entries WHERE conversation_id = ANY($1)
-    UNION ALL SELECT concat(message, content::text, inbound_json::text, outbound_json::text), id, phase = 'done' AND note IS DISTINCT FROM $3 AND created_at_unix_ns < $4 FROM turns WHERE conversation_id = ANY($1)
+    UNION ALL SELECT concat(message, inbound_json::text, outbound_json::text), id, phase = 'done' AND note IS DISTINCT FROM $3 AND created_at_unix_ns < $4 FROM turns WHERE conversation_id = ANY($1)
     UNION ALL SELECT message, NULL, FALSE FROM schedules WHERE conversation_id = ANY($1)
 ), expiring AS (
     SELECT DISTINCT f.id, f.turn_id FROM attachments f JOIN payloads p ON p.expired AND (strpos(p.payload, f.id) > 0 OR p.turn = f.turn_id) WHERE f.conversation_id = ANY($1)

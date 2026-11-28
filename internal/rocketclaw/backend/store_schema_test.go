@@ -1082,7 +1082,7 @@ func TestRoutineNamesMigration(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, store.PutThreadQueueItem("follow-up", &protocol.ThreadQueueItem{ConversationID: run, Message: "again"}))
+	require.NoError(t, store.PutThreadQueueItem("follow-up", &protocol.ThreadQueueItem{ConversationID: run, Inbound: queuedTestInbound("", "again", "")}))
 	_, err = store.db.ExecContext(ctx, `UPDATE turns SET inbound_json = $1::json, outbound_json = $2::json, origin = '[ScheduledMessage source=Cron]' WHERE input_id = 'follow-up'`,
 		`{"Source":"system","Text":"again","Kind":"enqueue","Cronjob":`+routine+`}`, `{"Text":"done","Cronjob":`+routine+`}`)
 	require.NoError(t, err)

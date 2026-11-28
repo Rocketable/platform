@@ -85,10 +85,10 @@ func TestQueueEdit(t *testing.T) {
 		index := slices.IndexFunc(before, func(item protocol.ThreadQueueItem) bool { return item.ID == id })
 		expected := before[index]
 		suffix := strings.TrimPrefix(expected.Inbound.Text, "original")
-		expected.Message, expected.Content.Text = "  revised\nbody  ", "  revised\nbody  "
-		expected.Inbound.Text = expected.Message + suffix
-		expected.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = expected.Message
-		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: id, Text: expected.Message})
+		revised := "  revised\nbody  "
+		expected.Inbound.Text = revised + suffix
+		expected.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = revised
+		_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: id, Text: revised})
 		require.NoError(t, err)
 		after, err := h.rt.Sessions.ThreadQueueForConversation("primary")
 		require.NoError(t, err)
@@ -100,7 +100,7 @@ func TestQueueEdit(t *testing.T) {
 		require.NoError(t, err)
 
 		row := listed.Items[index]
-		require.Equal(t, expected.Message, row.Text)
+		require.Equal(t, revised, row.Text)
 		require.Len(t, row.Attachments, 1)
 		require.Equal(t, delivery, row.Delivery)
 
@@ -130,13 +130,13 @@ func TestQueueEdit(t *testing.T) {
 		require.False(t, slices.ContainsFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id }))
 	}
 
-	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "primary", Kind: protocol.InboundKindSteer, Message: "unchanged"}))
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("steer", &protocol.ThreadQueueItem{ID: "steer", ConversationID: "primary", Kind: protocol.InboundKindSteer, Inbound: protocol.NewInboundMessage("", protocol.InboundKindSteer, "unchanged", true)}))
 	_, err = invoke[QueueItemResponse](ctx, h.conn, "EditQueueItem", &QueueItemRequest{Id: "primary", ItemId: "steer", Text: "changed"})
 	require.Equal(t, codes.NotFound, status.Code(err))
 
 	write := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindEnqueue, "from planner", false)
 	write.ConversationID, write.Metadata = "primary", map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:planner", protocol.InboundSenderAgentMetadataKey: "planner", "web_message_id": "agent"}
-	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ID: "agent", ConversationID: "primary", Kind: protocol.InboundKindEnqueue, Message: "from planner", Source: protocol.SourceSystem, Inbound: write}))
+	require.NoError(t, h.rt.Sessions.PutThreadQueueItem("agent", &protocol.ThreadQueueItem{ID: "agent", ConversationID: "primary", Kind: protocol.InboundKindEnqueue, Inbound: write}))
 
 	bob := metadata.NewOutgoingContext(t.Context(), tailnetUser("bob"))
 	for _, id := range []string{"agent", "waiting"} {
@@ -149,7 +149,7 @@ func TestQueueEdit(t *testing.T) {
 
 		i := slices.IndexFunc(items, func(item protocol.ThreadQueueItem) bool { return item.ID == id })
 		person := map[string]string{protocol.InboundRawTextMetadataKey: "from bob", "web_message_id": id, protocol.InboundPrincipalMetadataKey: "bob", protocol.InboundPrincipalNameMetadataKey: "bob", protocol.InboundPrincipalEmailMetadataKey: "bob"}
-		require.Equal(t, []any{protocol.SourceWeb, "bob", true, person, "bob"}, []any{items[i].Source, items[i].Principal, items[i].Inbound.Human, items[i].Inbound.Metadata, listed.Items[i].Principal}, id)
+		require.Equal(t, []any{protocol.SourceWeb, true, person, "bob"}, []any{items[i].Inbound.Source, items[i].Inbound.Human, items[i].Inbound.Metadata, listed.Items[i].Principal}, id)
 	}
 }
 
@@ -1335,7 +1335,7 @@ func TestSessionEntries(t *testing.T) {
 		person := map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
 
 		for i, item := range stored {
-			require.Equal(t, "Alice Smith", item.Principal)
+			require.Equal(t, "Alice Smith", item.Inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 			require.NotNil(t, item.Inbound, "a queued or stashed prompt keeps its full request")
 			require.Equal(t, []protocol.InboundKind{protocol.InboundKindEnqueue, protocol.InboundKindHeld}[i], item.Inbound.Kind)
 			require.Equal(t, item.ID, item.Inbound.Metadata["web_message_id"])
@@ -1625,7 +1625,7 @@ func TestSessionEntries(t *testing.T) {
 			stored, err := sessions.ThreadQueueForConversation(id)
 			require.NoError(t, err)
 			require.Equal(t, protocol.InboundKindHeld, stored[0].Kind)
-			require.Equal(t, text, stored[0].Content.Text)
+			require.Equal(t, text, stored[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
 
 			request := &QueueItemRequest{Id: id, ItemId: items.Items[0].Id}
 			_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", request)
@@ -1708,9 +1708,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, []any{GoalEventKind_GOAL_EVENT_KIND_UPDATE, int32(1), "complete", GoalCheckResult_GOAL_CHECK_RESULT_FAILED, "FAIL", ""}, []any{shown.Events[0].Kind, shown.Events[0].Turn, shown.Events[0].Status, shown.Events[0].Check, shown.Events[0].CheckOutput, shown.Events[0].MessageId})
 	})
 
-	require.NoError(t, sessions.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{
-		ConversationID: id, Message: "queued later", Principal: "alice", StashAt: time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
-	}))
+	require.NoError(t, sessions.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: id, StashAt: time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC), Inbound: queuedTestInbound("queued later", "alice")}))
 	queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
 	require.NoError(t, err)
 	require.Equal(t, []*QueueItem{{Id: "q1", Text: "queued later", Delivery: PromptDelivery_QUEUE, Principal: "alice"}}, queued.Items)
@@ -1720,10 +1718,10 @@ func TestSessionEntries(t *testing.T) {
 
 		core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) {
 			return []protocol.ThreadQueueItem{
-				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Message: "first later message", Principal: "Bob Smith"},
-				{ID: "steering", Kind: protocol.InboundKindSteer, Message: "guide the current response", Principal: "Bob Smith"},
-				{ID: "later-second", Kind: protocol.InboundKindEnqueue, Message: "second later message"},
-				{ID: "agent", Kind: protocol.InboundKindHeld, Message: "from an agent", Inbound: &protocol.InboundMessage{Text: "from an agent", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: "web:a", protocol.InboundSenderAgentMetadataKey: "planner"}}},
+				{ID: "later-first", Kind: protocol.InboundKindEnqueue, Inbound: queuedTestInbound("first later message", "Bob Smith")},
+				{ID: "steering", Kind: protocol.InboundKindSteer, Inbound: queuedTestInbound("guide the current response", "Bob Smith")},
+				{ID: "later-second", Kind: protocol.InboundKindEnqueue, Inbound: queuedTestInbound("second later message", "")},
+				{ID: "agent", Kind: protocol.InboundKindHeld, Inbound: &protocol.InboundMessage{Text: "from an agent", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: "web:a", protocol.InboundSenderAgentMetadataKey: "planner"}}},
 			}, nil
 		}
 		queued, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
@@ -1738,7 +1736,7 @@ func TestSessionEntries(t *testing.T) {
 
 	storedQueue, err := sessions.ThreadQueueForConversation(id)
 	require.NoError(t, err)
-	require.Equal(t, "alice", storedQueue[0].Principal)
+	require.Equal(t, "alice", storedQueue[0].Inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 
 	_, err = invoke[QueueItemResponse](ctx, connection, "SteerQueueItem", &QueueItemRequest{Id: id, ItemId: "q1"})
 	require.NoError(t, err)
@@ -1750,12 +1748,8 @@ func TestSessionEntries(t *testing.T) {
 	_, err = invoke[QueueItemResponse](ctx, connection, "SteerQueueItem", &QueueItemRequest{Id: id, ItemId: "missing"})
 	require.Equal(t, codes.NotFound, status.Code(err))
 
-	require.NoError(t, sessions.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{
-		ConversationID: id, Message: "second", Principal: "alice", Position: 0, StashAt: time.Date(2026, 9, 6, 12, 0, 1, 0, time.UTC),
-	}))
-	require.NoError(t, sessions.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{
-		ConversationID: id, Message: "third", Principal: "alice", Position: 1, StashAt: time.Date(2026, 9, 6, 12, 0, 2, 0, time.UTC),
-	}))
+	require.NoError(t, sessions.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ConversationID: id, Position: 0, StashAt: time.Date(2026, 9, 6, 12, 0, 1, 0, time.UTC), Inbound: queuedTestInbound("second", "alice")}))
+	require.NoError(t, sessions.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ConversationID: id, Position: 1, StashAt: time.Date(2026, 9, 6, 12, 0, 2, 0, time.UTC), Inbound: queuedTestInbound("third", "alice")}))
 
 	_, err = invoke[QueueItemResponse](t.Context(), connection, "RemoveQueueItem", &QueueItemRequest{Id: id, ItemId: "q2"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
@@ -1850,15 +1844,17 @@ func TestSessionEntries(t *testing.T) {
 			storedQueue, err := sessions.ThreadQueueForConversation(id)
 			require.NoError(t, err)
 
-			index := slices.IndexFunc(storedQueue, func(item protocol.ThreadQueueItem) bool { return item.Message == tt.want })
+			index := slices.IndexFunc(storedQueue, func(item protocol.ThreadQueueItem) bool {
+				return item.Inbound.Metadata[protocol.InboundRawTextMetadataKey] == tt.want
+			})
 			require.GreaterOrEqual(t, index, 0)
 			storedPrompt := storedQueue[index]
 			require.Contains(t, queued.Items, &QueueItem{Id: storedPrompt.ID, Text: tt.want, Delivery: tt.wantDelivery, Principal: "alice"})
 
-			require.Equal(t, tt.want, storedPrompt.Content.Text)
+			require.Equal(t, tt.want, storedPrompt.Inbound.Metadata[protocol.InboundRawTextMetadataKey])
 			require.Equal(t, tt.kind, storedPrompt.Kind)
-			require.Equal(t, "alice", storedPrompt.Principal)
-			require.Equal(t, protocol.SourceWeb, storedPrompt.Source)
+			require.Equal(t, "alice", storedPrompt.Inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+			require.Equal(t, protocol.SourceWeb, storedPrompt.Inbound.Source)
 		})
 	}
 
@@ -2872,9 +2868,9 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		queue, err := sessions.ThreadQueueForConversation(webID)
 		require.NoError(t, err)
 		require.Len(t, queue, 1)
-		require.Equal(t, "Continue this run", queue[0].Message)
-		require.Equal(t, protocol.SourceWeb, queue[0].Source)
-		require.Equal(t, "alice", queue[0].Principal)
+		require.Equal(t, "Continue this run", queue[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
+		require.Equal(t, protocol.SourceWeb, queue[0].Inbound.Source)
+		require.Equal(t, "alice", queue[0].Inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 
 		for _, test := range []struct {
 			source string
@@ -3160,13 +3156,13 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		queue, err := reopened.ThreadQueueForConversation(conversation)
 		require.NoError(t, err)
 		require.Len(t, queue, 1)
-		require.Equal(t, exact, queue[0].Message)
-		require.Equal(t, exact, queue[0].Content.Text)
-		require.Equal(t, "alice", queue[0].Principal)
-		require.Equal(t, protocol.SourceWeb, queue[0].Source)
-		require.Contains(t, queue[0].Content.TextAttachments[0], file.Id)
-		require.Contains(t, queue[0].Content.TextAttachments[1], imageFile.Id)
-		require.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: imageData}}, queue[0].Content.Attachments)
+		require.Equal(t, exact, queue[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
+		require.Equal(t, "alice", queue[0].Inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+		require.Equal(t, protocol.SourceWeb, queue[0].Inbound.Source)
+		references := strings.Split(strings.TrimPrefix(queue[0].Inbound.Text, exact+"\n\n"), "\n\n")
+		require.Contains(t, references[0], file.Id)
+		require.Contains(t, references[1], imageFile.Id)
+		require.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: imageData}}, queue[0].Inbound.Attachments)
 		materialized, err := root.ReadFile(filepath.Join(backend.UploadDir(cfg, conversation), file.Id, file.Name))
 		require.NoError(t, err)
 		require.Equal(t, data, materialized)
@@ -3180,7 +3176,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		require.Len(t, held, 2)
 		require.Equal(t, protocol.InboundKindHeld, held[1].Kind)
-		require.Equal(t, queue[0].Content, held[1].Content)
+		require.Equal(t, []any{queue[0].Inbound.Text, queue[0].Inbound.Attachments}, []any{held[1].Inbound.Text, held[1].Inbound.Attachments})
 
 		listed, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
 		require.NoError(t, err)
@@ -3195,13 +3191,13 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Equal(t, "alice", turns[len(turns)-1].Metadata[protocol.InboundPrincipalMetadataKey])
 		require.Contains(t, turns[len(turns)-1].Text, file.Id)
 		require.Equal(t, exact, turns[len(turns)-1].Metadata[protocol.InboundRawTextMetadataKey])
-		require.Equal(t, queue[0].Content.Attachments, turns[len(turns)-1].Attachments)
+		require.Equal(t, queue[0].Inbound.Attachments, turns[len(turns)-1].Attachments)
 		t.Run("pending steer restores attachment cards", func(t *testing.T) {
 			list := core.QueueItemsFunc
 			defer func() { core.QueueItemsFunc = list }()
 
 			core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) {
-				return []protocol.ThreadQueueItem{{ID: "attachment-input", Kind: protocol.InboundKindSteer, Message: turns[len(turns)-1].Text, Principal: "Bob Smith"}}, nil
+				return []protocol.ThreadQueueItem{{ID: "attachment-input", Kind: protocol.InboundKindSteer, Inbound: queuedTestInbound(turns[len(turns)-1].Text, "Bob Smith")}}, nil
 			}
 			pending, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
 			require.NoError(t, err)
@@ -3288,8 +3284,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		for _, test := range []struct{ text, want string }{
 			{"attachment:" + file.Id + " is literal prose  \n", "attachment:" + file.Id + " is literal prose  \n"},
-			{"literal\n\n" + queue[0].Content.TextAttachments[0] + "\nkeep this", "literal\n\n" + queue[0].Content.TextAttachments[0] + "\nkeep this"},
-			{queue[0].Content.TextAttachments[1], ""},
+			{"literal\n\n" + references[0] + "\nkeep this", "literal\n\n" + references[0] + "\nkeep this"},
+			{references[1], ""},
 		} {
 			_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 				json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, test.text)),
@@ -4267,6 +4263,13 @@ func withoutBackgroundJobs() *mockBackend {
 		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil },
 		PendingQuestionsFunc: func(context.Context, string) ([]protocol.AskUserQuestionRequest, error) { return nil, nil },
 	}
+}
+
+func queuedTestInbound(text, principal string) *protocol.InboundMessage {
+	inbound := protocol.NewInboundMessageFromContent("", protocol.InboundKindEnqueue, &protocol.InboundContent{Text: text}, true)
+	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
+
+	return inbound
 }
 
 func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, method string, request any) (*Response, error) {

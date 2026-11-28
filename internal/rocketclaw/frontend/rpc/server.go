@@ -1785,10 +1785,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	inbound.Metadata["web_message_id"] = cmp.Or(request.MessageId, rand.Text())
 
 	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
-		item := &protocol.ThreadQueueItem{
-			ID: inbound.Metadata["web_message_id"], Message: text, Principal: principal, Source: protocol.SourceWeb,
-			Kind: kind, Content: content, StashAt: time.Now().UTC(), Inbound: inbound,
-		}
+		item := &protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], Kind: kind, StashAt: time.Now().UTC(), Inbound: inbound}
 		if err := s.backend.StashQueueItem(ctx, request.Id, item); err != nil {
 			return nil, fmt.Errorf("web prompt: %w", err)
 		}
@@ -1955,12 +1952,9 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 	response := &ListQueueResponse{}
 
 	for i := range items {
-		text := strings.Join(append([]string{items[i].Message}, items[i].Content.TextAttachments...), "\n\n")
-		if inbound := items[i].Inbound; inbound != nil {
-			text = inbound.Text
-		}
+		inbound := items[i].Inbound
 
-		input := &TranscriptEvent{Role: "user", Text: text}
+		input := &TranscriptEvent{Role: "user", Text: inbound.Text}
 		if err := s.projectInputEvent(ctx, request.Id, input); err != nil {
 			return nil, err
 		}
@@ -1971,18 +1965,16 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			protocol.InboundKindHeld:  PromptDelivery_STASH,
 		}[items[i].Kind]
 
-		principal := items[i].Principal
-		if inbound := items[i].Inbound; inbound != nil && inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
+		principal := inbound.Metadata[protocol.InboundPrincipalMetadataKey]
+		if inbound.Metadata[protocol.InboundSenderSessionMetadataKey] != "" {
 			principal = "agent " + inbound.Metadata[protocol.InboundSenderAgentMetadataKey] + " (session " + inbound.Metadata[protocol.InboundSenderSessionMetadataKey] + ")"
 		}
 
 		item := &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery, Principal: principal}
 
-		text = items[i].Message
-		if inbound := items[i].Inbound; inbound != nil {
-			if raw, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
-				text = raw
-			}
+		text, ok := inbound.Metadata[protocol.InboundRawTextMetadataKey]
+		if !ok {
+			text = inbound.Text
 		}
 
 		if text != input.Text {

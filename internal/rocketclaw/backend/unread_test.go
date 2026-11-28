@@ -345,7 +345,7 @@ func TestQueuedWebMessageMarksItsSender(t *testing.T) {
 	bridge := newBridge()
 	conversationID := bridge.config.ConversationID
 	queued := webMessage(protocol.InboundKindEnqueue, "queued work", alice)
-	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Kind: protocol.InboundKindEnqueue, Message: queued.Text, Principal: "alice", Source: protocol.SourceWeb, Inbound: queued}))
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Kind: protocol.InboundKindEnqueue, Inbound: queued}))
 	require.NoError(t, bridge.Submit(t.Context(), webMessage(protocol.InboundKindPrompt, "first", bob)))
 
 	runTestBridge(t, bridge)

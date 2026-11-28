@@ -203,7 +203,7 @@ func TestSessionTagsPrivateLifecycle(t *testing.T) {
 	_, err = store.AppendEntryID(ctx, ids[1], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
 	require.NoError(t, err)
 
-	item := protocol.ThreadQueueItem{ID: "tags-queue", ConversationID: ids[2], Message: "waiting"}
+	item := protocol.ThreadQueueItem{ID: "tags-queue", ConversationID: ids[2], Inbound: queuedTestInbound("", "waiting", "")}
 	require.NoError(t, store.PutThreadQueueItem(item.ID, &item))
 	_, err = store.AppendEntryID(ctx, ids[4], testSessionEntryAt(cutoff.Add(time.Hour), "recent"))
 	require.NoError(t, err)
@@ -536,20 +536,19 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	secondStash := time.Date(2000, 1, 2, 4, 0, 0, 0, time.UTC)
 	conversationID := "slack-thread:D123:111.222"
 	dueAt := time.Date(2000, 1, 2, 16, 0, 0, 0, time.UTC)
-	content := protocol.InboundContent{
+	first := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindEnqueue, &protocol.InboundContent{
 		Text:               "write tests",
-		TextAttachments:    []string{"Slack text file attachment data.csv:\na,b", "Forwarded Slack thread:\noriginal author: original text"},
+		TextAttachments:    []string{"Slack text file attachment data.csv:\na,b"},
 		Attachments:        []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: tinyPNG()}},
-		AttachmentPresence: protocol.AttachmentPresenceImages,
 		AttachmentWarnings: []string{"original warning"},
-	}
-	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222"}
+	}, true)
+	first.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222"}
 
 	recordTestConversations(t, store, "helper", map[string]ConversationKind{conversationID: KindSlackThread, "other": KindWebChat})
 
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Content: content, Source: protocol.SourceSlack, SlackReply: reply, Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1", SlackChannel: reply.ChannelID, SlackTS: reply.MessageTS}))
-	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"}))
-	require.NoError(t, store.PutThreadQueueItem("other", &protocol.ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, StashAt: firstStash, Position: 0, ParkAfter: "s1", Inbound: first}))
+	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, StashAt: secondStash, Position: 1, ParkAfter: "s1", Inbound: queuedTestInbound(protocol.SourceSlack, "write changelog", "U2")}))
+	require.NoError(t, store.PutThreadQueueItem("other", &protocol.ThreadQueueItem{ConversationID: "other", StashAt: firstStash, Position: 0, Inbound: queuedTestInbound("", "keep", "U2")}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
 	require.NoError(t, store.Stop())
 	store = newTestSessionServiceAt(t, workspace)
@@ -557,29 +556,11 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	items, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Len(t, items, 2)
-	assert.Equal(t, content, items[0].Content)
-	assert.Equal(t, protocol.SourceSlack, items[0].Source)
-	assert.Equal(t, reply, items[0].SlackReply)
-
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), config: Config{ConversationID: conversationID, SessionService: store}}
-	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
-	inbound := (<-bridge.requestCh).inbound
-	assert.Equal(t, "write tests\n\nSlack text file attachment data.csv:\na,b\n\nForwarded Slack thread:\noriginal author: original text", inbound.Text)
-	assert.Equal(t, content.Attachments, inbound.Attachments)
-	assert.Equal(t, content.AttachmentWarnings, inbound.AttachmentWarnings)
-	assert.Equal(t, protocol.AttachmentPresenceImages, inbound.AttachmentPresence)
-	assert.Equal(t, protocol.SourceSlack, inbound.Source)
-	assert.Equal(t, reply, inbound.SlackReply)
-	assert.Equal(t, "U1", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.Equal(t, first, items[0].Inbound)
 	assert.Equal(t, protocol.InboundKind("enqueue"), items[0].Kind)
 	assert.Equal(t, protocol.InboundKind("steer"), items[1].Kind)
-	assert.Equal(t, "U1", items[0].Principal)
-	assert.Equal(t, "U2", items[1].Principal)
-	assert.Equal(t, "write changelog", items[1].Message)
-	assert.Equal(t, "D123", items[1].SlackChannel)
-	assert.Equal(t, "333.444", items[1].SlackTS)
+	assert.Equal(t, "write changelog", items[1].Inbound.Text)
 	assert.Equal(t, "q1", items[0].ID)
-	assert.Equal(t, "write tests", items[0].Message)
 	assert.Equal(t, firstStash, items[0].StashAt)
 	assert.Equal(t, "s1", items[0].ParkAfter)
 	assert.Equal(t, "q2", items[1].ID)
@@ -1655,7 +1636,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 			_, err = store.db.ExecContext(ctx, `UPDATE turns SET phase = 'done', terminal = 'stopped', created_at_unix_ns = $2 WHERE id = $1`, "ended-"+id, old.UnixNano())
 			require.NoError(t, err)
 			seedActiveTurn(t, store, id, "active-"+id, testSessionEntryAt(cutoff.Add(time.Second), "current work"))
-			require.NoError(t, store.PutThreadQueueItem("queued-"+id, &protocol.ThreadQueueItem{ID: "queued-" + id, ConversationID: id, Message: "pending", Kind: protocol.InboundKindHeld, StashAt: old}))
+			require.NoError(t, store.PutThreadQueueItem("queued-"+id, &protocol.ThreadQueueItem{ID: "queued-" + id, ConversationID: id, Kind: protocol.InboundKindHeld, StashAt: old, Inbound: protocol.NewInboundMessage("", protocol.InboundKindHeld, "pending", true)}))
 		}
 
 		_, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: "empty-user", Agent: "user", CreatedBy: "bob@example.com"}, harness.AgentStickyUser)
@@ -1746,7 +1727,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 
 		_, err = store.AppendEntryID(ctx, id, testSessionEntryAt(cutoff.Add(time.Second), "attachment:file-shown"))
 		require.NoError(t, err)
-		require.NoError(t, store.PutThreadQueueItem("queued", &protocol.ThreadQueueItem{ID: "queued", ConversationID: id, Message: "attachment:file-queued", Kind: protocol.InboundKindHeld, StashAt: old}))
+		require.NoError(t, store.PutThreadQueueItem("queued", &protocol.ThreadQueueItem{ID: "queued", ConversationID: id, Kind: protocol.InboundKindHeld, StashAt: old, Inbound: protocol.NewInboundMessage("", protocol.InboundKindHeld, "attachment:file-queued", true)}))
 		require.NoError(t, store.PutScheduledMessage("daily", &protocol.ScheduledMessageState{ConversationID: id, Agent: "room", Message: "attachment:file-scheduled", DueAt: cutoff, Recurring: true, Interval: time.Hour}))
 
 		_, err = store.PruneStateBefore(ctx, cutoff, 0)
@@ -1779,7 +1760,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 
 	webID := "web-queued"
 	createWebChat(t, store, protocol.Conversation{ID: webID, Agent: "planner"})
-	webItem := protocol.ThreadQueueItem{ID: "web-q1", ConversationID: webID, Message: "first web message", Principal: "alice", Source: protocol.SourceWeb}
+	webItem := protocol.ThreadQueueItem{ID: "web-q1", ConversationID: webID, Inbound: queuedTestInbound(protocol.SourceWeb, "first web message", "alice")}
 	require.NoError(t, store.PutThreadQueueItem(webItem.ID, &webItem))
 
 	queuedSlack := protocol.SlackThreadConversationID("DQUEUE", slackTestTS(cutoff.Add(-time.Hour)))
@@ -1791,7 +1772,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	_, err = store.AppendEntryID(t.Context(), emptySlack, testSessionEntryAt(cutoff.Add(-time.Hour), emptySlack))
 	require.NoError(t, err)
 
-	slackItem := protocol.ThreadQueueItem{ID: "slack-q1", ConversationID: queuedSlack, Message: "waiting slack", Principal: "U1"}
+	slackItem := protocol.ThreadQueueItem{ID: "slack-q1", ConversationID: queuedSlack, Inbound: queuedTestInbound("", "waiting slack", "U1")}
 	require.NoError(t, store.PutThreadQueueItem(slackItem.ID, &slackItem))
 
 	managedID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
@@ -1803,7 +1784,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	privateItem := protocol.ThreadQueueItem{ID: "private-q1", ConversationID: privateID, Message: "private follow-up", Principal: "mcp"}
+	privateItem := protocol.ThreadQueueItem{ID: "private-q1", ConversationID: privateID, Inbound: queuedTestInbound("", "private follow-up", "mcp")}
 	require.NoError(t, store.PutThreadQueueItem(privateItem.ID, &privateItem))
 
 	orphanID := "external_mcp:planner:queued-orphan"
@@ -1812,7 +1793,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, id := range []string{"orphan-q1", "orphan-q2"} {
-		item := protocol.ThreadQueueItem{ID: id, ConversationID: orphanID, Message: "orphan follow-up", Principal: "mcp"}
+		item := protocol.ThreadQueueItem{ID: id, ConversationID: orphanID, Inbound: queuedTestInbound("", "orphan follow-up", "mcp")}
 		require.NoError(t, store.PutThreadQueueItem(id, &item))
 	}
 
@@ -1828,7 +1809,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
 	assert.Equal(t, webItem.ID, queue[0].ID)
-	assert.Equal(t, webItem.Message, queue[0].Message)
+	assert.Equal(t, webItem.Inbound.Text, queue[0].Inbound.Text)
 
 	_, ok, err = store.Thread(queuedSlack)
 	require.NoError(t, err)

@@ -175,7 +175,7 @@ SELECT COALESCE(f.mcp, t.mcp) FROM this t LEFT JOIN first f ON true`, chat, stri
 			inbound.Metadata["web_message_id"] = id
 		}
 
-		item := &protocol.ThreadQueueItem{ID: id, Message: text, Principal: inbound.Metadata[protocol.InboundPrincipalMetadataKey], Source: inbound.Source, Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: inbound}
+		item := &protocol.ThreadQueueItem{ID: id, Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: inbound}
 		if err := queue.StashQueueItem(ctx, chat, item); err != nil {
 			if i > 0 {
 				err = errors.Join(err, tx.Commit())

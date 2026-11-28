@@ -81,10 +81,10 @@ func TestDeleteCurrentBranchStopsItsTurnAndRunsTheQueueFromTheBranchPoint(t *tes
 	require.Contains(t, <-requests, "C prime")
 
 	for i, id := range []string{"queued-1", "queued-2"} {
-		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main", Message: id, Source: protocol.SourceWeb, Position: i}))
+		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: "main", Position: i, Inbound: queuedTestInbound(protocol.SourceWeb, id, "")}))
 	}
 
-	require.NoError(t, s.PutThreadQueueItem("stashed", &protocol.ThreadQueueItem{ID: "stashed", ConversationID: "main", Message: "for later", Source: protocol.SourceWeb, Kind: protocol.InboundKindHeld, Position: 2}))
+	require.NoError(t, s.PutThreadQueueItem("stashed", webQueueItem("main", "stashed", "for later", "", protocol.InboundKindHeld)))
 
 	for _, dryRun := range []bool{true, false} {
 		deletion, err := rt.DeleteBranch(ctx, "main", fmt.Sprintf("%d:0", cPrime), dryRun)

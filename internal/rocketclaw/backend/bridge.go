@@ -154,17 +154,8 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 		return item, false, err
 	}
 
-	content := item.Content
-	content.Text = item.Message
-
-	current := item.Inbound
-	if current == nil {
-		current = protocol.NewInboundMessageFromContent(item.Source, item.Kind, &content, true)
-		current.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
-	}
-
-	request.inbound.Text = current.Text
-	if raw, ok := current.Metadata[protocol.InboundRawTextMetadataKey]; ok {
+	request.inbound.Text = item.Inbound.Text
+	if raw, ok := item.Inbound.Metadata[protocol.InboundRawTextMetadataKey]; ok {
 		if request.inbound.Metadata == nil {
 			request.inbound.Metadata = make(map[string]string)
 		}
@@ -172,7 +163,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 		request.inbound.Metadata[protocol.InboundRawTextMetadataKey] = raw
 	}
 
-	copyProvenance(request.inbound, current)
+	copyProvenance(request.inbound, item.Inbound)
 
 	return item, true, nil
 }
@@ -683,7 +674,7 @@ func (b *Bridge) storeStopped(request *bridgeRequest, operation string) error {
 	}
 
 	id := rand.Text()
-	item := protocol.ThreadQueueItem{ID: id, ConversationID: owner, Kind: protocol.InboundKindEnqueue, Message: msg.Text, Source: msg.Source, Principal: msg.Metadata[protocol.InboundPrincipalMetadataKey], StashAt: time.Now().UTC(), Inbound: msg}
+	item := protocol.ThreadQueueItem{ID: id, ConversationID: owner, Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: msg}
 	item.Position = len(slices.DeleteFunc(queue, func(queued protocol.ThreadQueueItem) bool { return queued.ParkAfter != "" }))
 
 	if err := b.config.SessionService.PutThreadQueueItem(id, &item); err != nil {
@@ -1480,49 +1471,16 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 	}
 	b.mu.Unlock()
 
-	if inbound := item.Inbound; inbound != nil {
-		if inbound.SyncDestination == "" {
-			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit stored message")
-		}
-
-		destination, err := b.threads.recordedBridge(ctx, inbound.SyncDestination)
-		if err != nil {
-			return fmt.Errorf("load stored message destination: %w", err)
-		}
-
-		return destination.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID, producer: b}, "submit stored message")
+	if item.Inbound.SyncDestination == "" {
+		return b.enqueue(ctx, &bridgeRequest{inbound: item.Inbound, queueItemID: item.ID}, "submit stored message")
 	}
 
-	content := item.Content
-	content.Text = item.Message
-	inbound := protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), &content, true)
-
-	inbound.ConversationID = b.config.ConversationID
-	if principal := strings.TrimSpace(item.Principal); principal != "" {
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
+	destination, err := b.threads.recordedBridge(ctx, item.Inbound.SyncDestination)
+	if err != nil {
+		return fmt.Errorf("load stored message destination: %w", err)
 	}
 
-	inbound.Metadata["web_message_id"] = item.ID
-
-	if item.SlackChannel != "" {
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
-	}
-
-	if item.SlackReply != nil {
-		inbound.SlackReply = new(*item.SlackReply)
-	}
-
-	startedAt := time.Now()
-	err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit enqueued message")
-
-	log := b.log
-	if !item.StashAt.IsZero() {
-		log = log.With("queue_age_ms", time.Since(item.StashAt).Milliseconds())
-	}
-
-	log.Info("queue item admission returned", "event", "queue_admitted", "conversation_id", b.config.ConversationID, "queue_item_id", item.ID, "admitted", err == nil, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
-
-	return err
+	return destination.enqueue(ctx, &bridgeRequest{inbound: item.Inbound, queueItemID: item.ID, producer: b}, "submit stored message")
 }
 
 func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *protocol.ScheduledMessageState, now time.Time) error {

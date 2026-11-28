@@ -480,7 +480,7 @@ func TestSearchSessionsWorkTerms(t *testing.T) {
 	require.NoError(t, s.SaveTurnStep(ctx, searchChatB, "turn-b/call/q/answer", json.RawMessage(`{}`)))
 
 	for id, chat := range map[string]string{"queued-a": searchChatA, "queued-w": searchChatW} {
-		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ConversationID: chat, Message: "later", StashAt: time.Now()}))
+		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ConversationID: chat, StashAt: time.Now(), Inbound: queuedTestInbound("", "later", "")}))
 	}
 
 	require.NoError(t, s.PutScheduledMessage("reminder", &protocol.ScheduledMessageState{ConversationID: searchChatH, Agent: "cron", Message: "remind", DueAt: time.Now().Add(time.Hour)}))

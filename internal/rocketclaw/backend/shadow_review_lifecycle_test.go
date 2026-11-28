@@ -105,7 +105,8 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 		require.NoError(t, store.SaveAttachment(t.Context(), id, turnID, &files[i], i == 0))
 	}
 
-	require.NoError(t, store.PutThreadQueueItem("stash", &protocol.ThreadQueueItem{ID: "stash", ConversationID: id, Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Content: protocol.InboundContent{TextAttachments: []string{"attachment:stashed-upload"}}}))
+	stashed := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindHeld, &protocol.InboundContent{TextAttachments: []string{"attachment:stashed-upload"}}, true)
+	require.NoError(t, store.PutThreadQueueItem("stash", &protocol.ThreadQueueItem{ID: "stash", ConversationID: id, Kind: protocol.InboundKindHeld, Inbound: stashed}))
 	require.NoError(t, startTurnDB(t.Context(), store.db, "unfinished", id, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "work", true)))
 
 	_, err := store.DeleteSession(t.Context(), id)
@@ -117,7 +118,7 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 	queue, err := store.ThreadQueueForConversation(id)
 	require.NoError(t, err)
 	require.Len(t, queue, 1)
-	_, uploaded, err := store.InputAttachments(t.Context(), id, queue[0].Content.TextAttachments[0])
+	_, uploaded, err := store.InputAttachments(t.Context(), id, queue[0].Inbound.Text)
 	require.NoError(t, err)
 	require.Len(t, uploaded, 1)
 	_, err = store.LoadAttachment(t.Context(), id, files[2].ID, false)

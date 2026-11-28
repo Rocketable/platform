@@ -150,7 +150,7 @@ func (dt *agentDraftTest) send(t *testing.T, text string) *protocol.ThreadQueueI
 
 	inbound.Metadata[agentDraftFilesMetadataKey] = string(data)
 
-	return &protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], Message: text, Principal: "alice", Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: inbound}
+	return &protocol.ThreadQueueItem{ID: inbound.Metadata["web_message_id"], Kind: protocol.InboundKindEnqueue, StashAt: time.Now().UTC(), Inbound: inbound}
 }
 
 func (dt *agentDraftTest) stash(t *testing.T, items ...*protocol.ThreadQueueItem) {
