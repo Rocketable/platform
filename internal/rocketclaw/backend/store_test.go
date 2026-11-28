@@ -838,13 +838,11 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, threads)
 
-	for _, id := range []string{"active", "legacy", "terminal"} {
+	for _, id := range []string{"active", "terminal"} {
 		createWebChat(t, store, protocol.Conversation{ID: id, Agent: "planner", CreatedBy: string(ThreadCreatedByRoutine)})
 		require.NoError(t, store.BeginGoal(id, &GoalState{Objective: "work", MaxTurns: 1}))
 	}
 
-	_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET goal_status = '' WHERE conversation_id = 'legacy'`)
-	require.NoError(t, err)
 	_, err = store.UpdateGoalStatus("terminal", GoalStatusComplete, "done")
 	require.NoError(t, err)
 
@@ -852,7 +850,6 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]ThreadState{
 		"active": {Agent: "planner", CreatedBy: ThreadCreatedByRoutine},
-		"legacy": {Agent: "planner", CreatedBy: ThreadCreatedByRoutine},
 	}, threads)
 }
 

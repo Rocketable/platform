@@ -1262,7 +1262,7 @@ FROM self s CROSS JOIN producing p CROSS JOIN unsettled u CROSS JOIN lane l`, b.
 		return fmt.Errorf("load goal for later work: %w", err)
 	}
 
-	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+	if ok && goal.Status == GoalStatusActive {
 		b.log.Info("later work blocked", "event", "queue_blocked", "conversation_id", b.config.ConversationID, "blocker", "goal")
 		return nil
 	}
@@ -1868,7 +1868,7 @@ func (b *Bridge) skipObsoleteGoal(ctx context.Context, request *bridgeRequest) (
 		return false, inputPersistenceError{cause: fmt.Errorf("load goal continuation state: %w", err)}
 	}
 
-	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+	if ok && goal.Status == GoalStatusActive {
 		return false, nil
 	}
 
@@ -2268,7 +2268,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	} else {
 		if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err != nil {
 			return runResult{}, fmt.Errorf("load active goal note: %w", err)
-		} else if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		} else if ok && goal.Status == GoalStatusActive {
 			msg.GoalTurn = true
 
 			if note := strings.TrimSpace(goal.Note); note != "" {
@@ -2432,7 +2432,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	switch {
-	case goalFound && strings.TrimSpace(goal.Status) == GoalStatusActive:
+	case goalFound && goal.Status == GoalStatusActive:
 		customTools = append(customTools, updateGoalTool(b.config.SessionService, b.config.ConversationID, &goal))
 	case !unaddressed:
 		customTools = append(customTools, createGoalTool(b.config.SessionService, b.config.ConversationID, origin))
@@ -2717,7 +2717,7 @@ WHERE q.conversation_id = $1 AND q.phase = 'waiting'`, &taken, b.config.Conversa
 			return result, fmt.Errorf("load goal completion status: %w", err)
 		}
 
-		result.goalCompleted = ok && strings.TrimSpace(goal.Status) == GoalStatusComplete
+		result.goalCompleted = ok && goal.Status == GoalStatusComplete
 	}
 
 	return result, nil
@@ -3494,7 +3494,7 @@ func updateGoalTool(store *SessionService, conversationID string, active *GoalSt
 			return harness.TextToolResult("goal progress recorded"), nil
 		}
 
-		return harness.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
+		return harness.TextToolResult("goal marked " + goal.Status), nil
 	}}
 }
 
@@ -3568,7 +3568,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 
 		goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
 		accounted := msg.GoalAction != protocol.GoalActionNone
-		statusActive := err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive
+		statusActive := err == nil && goalOK && goal.Status == GoalStatusActive
 
 		outbound.GoalTurn = accounted || msg.GoalTurn || statusActive
 

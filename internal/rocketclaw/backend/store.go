@@ -276,7 +276,7 @@ func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, go
 		return err
 	}
 
-	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8, goal_check = $9, goal_force = $10 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin, goal.Check, goal.Force)
+	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8, goal_check = $9, goal_force = $10 WHERE conversation_id = $1 AND COALESCE(goal_status <> $4, TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin, goal.Check, goal.Force)
 	if err != nil {
 		return err
 	}
@@ -620,7 +620,7 @@ SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL
 
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
 	return queryMap(context.Background(), s.db, `SELECT conversation_id, agent, created_by FROM conversations
-WHERE goal_status = '' OR goal_status = $1 ORDER BY conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
+WHERE goal_status = $1 ORDER BY conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
 }
 
 type activeGoalThreadScanner struct{}
@@ -1687,7 +1687,7 @@ func (s *SessionService) setGoalStatus(conversationID, status, note string) (Goa
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive)
+	rows, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND goal_status = $5`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive)
 	if err != nil {
 		return GoalState{}, false, err
 	}

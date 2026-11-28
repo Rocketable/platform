@@ -970,9 +970,6 @@ FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, s
 	goal.CreatedAt = timeFromUnixNano(createdAt)
 
 	goal.UpdatedAt = timeFromUnixNano(updatedAt)
-	if strings.TrimSpace(goal.Status) == "" {
-		goal.Status = GoalStatusActive
-	}
 
 	return goal, true, nil
 }
@@ -1587,7 +1584,7 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 	if finish.accountGoal {
 		if _, err := tx.ExecContext(ctx, `WITH accounted AS (
     UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3
-    WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $2) RETURNING goal_status
+    WHERE conversation_id = $4 AND goal_status = $2 RETURNING goal_status
 )
 INSERT INTO goal_events (conversation_id, kind, turn, status, entry_id, at_unix_ns)
 SELECT c.conversation_id, $5, c.goal_turns_used + 1, COALESCE(a.goal_status, c.goal_status), $6, $3
