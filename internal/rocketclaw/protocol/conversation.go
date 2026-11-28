@@ -69,7 +69,7 @@ type AmbientScreen struct {
 
 type PrimaryTextRouter interface {
 	ScreenAmbient(ctx context.Context, target TextConversationTarget, screen *AmbientScreen) (pass bool)
-	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
+	MentionThread(target TextConversationTarget) (recorded bool, err error)
 	SubmitMention(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) (bool, error)
 	InterruptTurn(ctx context.Context, turnID string) error
 	WebURL(conversationID string) (string, error)

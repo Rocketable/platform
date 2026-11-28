@@ -121,34 +121,6 @@ func TestRuntimeSwitchesConversationAgent(t *testing.T) {
 	require.Equal(t, ThreadState{Agent: "planner", CreatedBy: "alice"}, thread)
 }
 
-func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
-	t.Parallel()
-
-	store := newWorkspaceSessionService(t)
-	createWebChat(t, store, protocol.Conversation{ID: protocol.SlackThreadConversationID("C123", "1.1"), Agent: "main", CreatedBy: string(ThreadCreatedByRoutine)})
-	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "2.2"), Agent: "main"}))
-	createWebChat(t, store, protocol.Conversation{ID: protocol.SlackThreadConversationID("C123", "3.3"), Agent: "main"})
-
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return newDirectBridgeMock() }})
-
-	for _, tt := range []struct {
-		name, threadTS   string
-		recorded, report bool
-	}{
-		{name: "cron report", threadTS: "1.1", recorded: true, report: true},
-		{name: "External MCP thread from before Web chats", threadTS: "2.2", recorded: true, report: true},
-		{name: "mention thread", threadTS: "3.3", recorded: true},
-		{name: "unknown thread", threadTS: "4.4"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			recorded, report, err := manager.MentionThread(protocol.TextConversationTarget{ChannelID: "C123", ThreadID: tt.threadTS, Agent: "main"})
-			require.NoError(t, err)
-			assert.Equal(t, tt.recorded, recorded)
-			assert.Equal(t, tt.report, report)
-		})
-	}
-}
-
 func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	t.Parallel()
 
@@ -468,10 +440,9 @@ func TestSlackThreadMentionContinuesManagedSlackThreadOfSameAgent(t *testing.T) 
 		{threadTS: "3.3", messageTS: "9.3", session: "slack-thread:D123:3.3:slack"},
 	} {
 		target := protocol.TextConversationTarget{ChannelID: "D123", MessageID: tt.messageTS, ThreadID: tt.threadTS, Agent: "slack"}
-		recorded, report, err := manager.MentionThread(target)
+		recorded, err := manager.MentionThread(target)
 		require.NoError(t, err)
 		assert.Equal(t, tt.recorded, recorded, tt.session)
-		assert.False(t, report)
 
 		accepted, err := manager.SubmitMention(t.Context(), "slack", target, newThreadInboundMessage("later", tt.messageTS, tt.threadTS))
 		require.NoError(t, err)

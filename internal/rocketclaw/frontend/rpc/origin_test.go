@@ -51,7 +51,7 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	}})
 	scheduled, scheduledAgain := "cron:cron/daily.md:20260905T010000.000000001Z:first", "cron:cron/daily.md:20260905T013000.000000003Z:third"
 	oneOff, oneOffLater := "one-off-cron:cron/report.md:20260905T020000.000000002Z:second", "one-off-cron:cron/report.md:20260905T030000.000000004Z:fourth"
-	routineSlack, plainSlack, destination := "slack-thread:C1:1.1", "slack-thread:C2:2.2", "slack-thread:C3:3.3"
+	plainSlack, destination := "slack-thread:C2:2.2", "slack-thread:C3:3.3"
 
 	for id, run := range map[string]*protocol.RoutineRun{
 		scheduled: {Path: "agents/daily.md#1h", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, scheduledAgain: {Path: "agents/daily.md#1h", At: time.Date(2026, 9, 5, 1, 30, 0, 3, time.UTC)},
@@ -66,33 +66,28 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	}
 
 	for id, thread := range map[string]backend.ThreadState{
-		routineSlack: {Agent: "main", CreatedBy: backend.ThreadCreatedByRoutine}, plainSlack: {Agent: "main", CreatedBy: "U1"},
-		"web:" + scheduled: {Agent: "main", CreatedBy: "alice"}, "web:" + oneOff: {Agent: "main", CreatedBy: "alice"},
+		plainSlack: {Agent: "main", CreatedBy: "U1"}, "web:" + scheduled: {Agent: "main", CreatedBy: "alice"}, "web:" + oneOff: {Agent: "main", CreatedBy: "alice"},
 		"web-cron-synced": {Agent: "main", CreatedBy: "alice"}, "web-later-cron": {Agent: "main", CreatedBy: "alice"}, "web-empty": {Agent: "main", CreatedBy: "alice"},
 	} {
 		createWebChat(t, sessions, protocol.Conversation{ID: id, Agent: thread.Agent, CreatedBy: string(thread.CreatedBy)})
 	}
 
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET kind = 'slack_thread', slack_channel = split_part(conversation_id, ':', 2), slack_thread = split_part(conversation_id, ':', 3)
-WHERE conversation_id IN ($1, $2)`, routineSlack, plainSlack)
+WHERE conversation_id = $1`, plainSlack)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET routine_run = substr(conversation_id, 5) WHERE conversation_id IN ($1, $2)`, "web:"+scheduled, "web:"+oneOff)
 	require.NoError(t, err)
 	require.NoError(t, sessions.RegisterExternalMCPConversation("ext-1", "main", &backend.ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
 
-	for run, chat := range map[string]string{scheduled: routineSlack, oneOff: plainSlack, "external_mcp:private": destination, scheduledAgain: "web-cron-synced", oneOffLater: "web-later-cron"} {
+	for run, chat := range map[string]string{oneOff: plainSlack, "external_mcp:private": destination, scheduledAgain: "web-cron-synced", oneOffLater: "web-later-cron"} {
 		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, run, chat)
 		require.NoError(t, err)
 	}
 
-	for _, id := range []string{scheduled, routineSlack, oneOff, plainSlack, "external_mcp:private", destination, "web:" + oneOff, scheduledAgain, "web-cron-synced", "web-later-cron", oneOffLater} {
+	for _, id := range []string{scheduled, oneOff, plainSlack, "external_mcp:private", destination, "web:" + oneOff, scheduledAgain, "web-cron-synced", "web-later-cron", oneOffLater} {
 		_, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "turn"})
 		require.NoError(t, err)
 	}
-
-	_, err = db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
-VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, routineSlack)
-	require.NoError(t, err)
 
 	bulk := make(map[string]string)
 
@@ -112,8 +107,8 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, routineSlack)
 		bulk[facts.ConversationID] = string(raw)
 	}
 
-	require.ElementsMatch(t, []string{routineSlack, plainSlack, destination, "web:" + scheduled, "web:" + oneOff, "web-cron-synced", "web-later-cron", "web-empty"}, slices.Collect(maps.Keys(bulk)), "cron runs and private External MCP conversations stay hidden")
-	require.ElementsMatch(t, []string{routineSlack, destination, "web:" + scheduled, "web:" + oneOff, "web-cron-synced"}, originated)
+	require.ElementsMatch(t, []string{plainSlack, destination, "web:" + scheduled, "web:" + oneOff, "web-cron-synced", "web-later-cron", "web-empty"}, slices.Collect(maps.Keys(bulk)), "cron runs and private External MCP conversations stay hidden")
+	require.ElementsMatch(t, []string{destination, "web:" + scheduled, "web:" + oneOff, "web-cron-synced"}, originated)
 
 	listed := make(map[string]string)
 
@@ -127,7 +122,7 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, routineSlack)
 
 		return nil
 	}}))
-	require.Equal(t, map[string]string{routineSlack: "daily", plainSlack: "", destination: "", "web:" + oneOff: "report", "web-cron-synced": "daily", "web-later-cron": ""}, listed, "only creating cron history counts; private producers remain absent")
+	require.Equal(t, map[string]string{plainSlack: "", destination: "", "web:" + oneOff: "report", "web-cron-synced": "daily", "web-later-cron": ""}, listed, "only creating cron history counts; private producers remain absent")
 
 	for id, origin := range bulk {
 		for _, limit := range []int32{0, 1} {
@@ -179,7 +174,7 @@ UPDATE conversations c SET revert_message_id = f.id::text || ':0' FROM first_ent
 
 	matches, err := search(ctx, "CRON-AGENT")
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{routineSlack, "web-cron-synced"}, slices.Collect(maps.Keys(matches)), "chats without history are not searched")
+	require.ElementsMatch(t, []string{"web-cron-synced"}, slices.Collect(maps.Keys(matches)), "chats without history are not searched")
 
 	_, err = search(t.Context(), "producer")
 	require.Equal(t, codes.Unauthenticated, status.Code(err))

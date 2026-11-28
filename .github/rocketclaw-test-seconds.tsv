@@ -160,7 +160,6 @@
 1.4	TestSessionSummaryHistoryAllocationBudget
 1.4	TestRuntimeProducerReportsToDestination
 1.4	TestHistoryFollowsHiddenRun
-1.4	TestThreadBridgeManagerMentionThreadRecognizesReportThreads
 1.4	TestBackgroundNoteConsumedBeforeMoveIsNotOfferedAgain
 1.4	TestSessionWriteReplyWakesHelper
 1.4	TestSessionTagToolsBridge

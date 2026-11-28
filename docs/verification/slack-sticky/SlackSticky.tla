@@ -28,7 +28,8 @@ EXTENDS Integers, Sequences, FiniteSets
            under a mention root that the Channel Session owns
      10    a top-level message (its own thread is ts 10)
      11    an edit of a reply in root 1's thread, with its own admission key
-     12    a reply in a Report Thread (ts 300)
+     12    a reply in a thread whose root the bot posted without the Channel Session mark, such as an older cron
+           report or External MCP thread (ts 300); no conversation is recorded for it
    An admitted message runs as an ambient turn in its thread's Thread Session: deferred, it shows Slack status only
    once a tool call other than slack_no_reply has finished, and it posts its answer with the footer, or nothing. *)
 
@@ -189,11 +190,12 @@ define
     ExpectedLoc(i) == IF movedTo[i] # NoKey THEN rootTs[i] ELSE Loc(home[i])
     ExpectedFooter(i) == IF movedTo[i] # NoKey THEN movedTo[i] ELSE home[i]
     \* The `message` handler's gate and classification, read with the channel's agent a: "ignore", "admit" (an edit,
-    \* not screened) or "screen". Mention text, then edits, then Report Threads, then an unrecorded mention root.
+    \* not screened) or "screen". Mention text, then edits, then an unrecorded thread under an unmarked bot root, then
+    \* an unrecorded mention root.
     Classify(i, a) ==
         IF i \in Mentions /\ Mutation # "ambient-mentions" THEN "ignore"
         ELSE IF i \in Edits THEN (IF exists[TS(MsgThread(i), a)] THEN "admit" ELSE "ignore")
-        ELSE IF MsgThread(i) = ReportTs THEN "ignore"
+        ELSE IF MsgThread(i) = ReportTs /\ ~exists[TS(ReportTs, a)] THEN "ignore"
         ELSE IF /\ ~TopLevel(i) /\ MsgThread(i) \in Roots /\ ~exists[TS(MsgThread(i), a)]
                 /\ Mutation # "ambient-mention-root" THEN "ignore"
         ELSE "screen"
@@ -227,7 +229,8 @@ define
     SessionAgentFixed == \A k \in Keys : active[k] # 0 => agentOf[active[k]] = convAgent[k]
     \* A message that mentions the bot is never admitted as ambient: the mention path keeps it.
     MentionNeverAmbient == \A m \in Mentions : ~amb[m]
-    \* A reply in a Report Thread is never admitted as ambient.
+    \* A reply under an unmarked bot root is never admitted as ambient. This holds from the model's starting states,
+    \* which record no conversation for that thread; README.md says what it leaves out.
     NoAmbientInReport == \A i \in Items : amb[i] => MsgThread(i) # ReportTs
     \* An ambient admission never creates the Thread Session of a thread whose root mentions the bot.
     NoAmbientUnderMentionRoot == ~rootMade
@@ -480,7 +483,7 @@ Deliver:
         with m \in {x \in Mentions : delivered[x] < 1 + Dups /\ Visible(x)} do
             delivered[m] := delivered[m] + 1;
             if m \in ReplyMentions /\ Mutation = "legacy-report" then
-                \* A thread whose root the bot posted is read as a Report Thread.
+                \* Every thread whose root the bot posted is ignored, as before the Channel Session mark.
                 if phase[m] = "new" then phase[m] := "dropped"; end if;
             elsif Seen(m, KeyFor(m, cfg)) then
                 skip;
@@ -706,10 +709,11 @@ ExpectedLoc(i) == IF movedTo[i] # NoKey THEN rootTs[i] ELSE Loc(home[i])
 ExpectedFooter(i) == IF movedTo[i] # NoKey THEN movedTo[i] ELSE home[i]
 
 
+
 Classify(i, a) ==
     IF i \in Mentions /\ Mutation # "ambient-mentions" THEN "ignore"
     ELSE IF i \in Edits THEN (IF exists[TS(MsgThread(i), a)] THEN "admit" ELSE "ignore")
-    ELSE IF MsgThread(i) = ReportTs THEN "ignore"
+    ELSE IF MsgThread(i) = ReportTs /\ ~exists[TS(ReportTs, a)] THEN "ignore"
     ELSE IF /\ ~TopLevel(i) /\ MsgThread(i) \in Roots /\ ~exists[TS(MsgThread(i), a)]
             /\ Mutation # "ambient-mention-root" THEN "ignore"
     ELSE "screen"
@@ -743,6 +747,7 @@ StopPrecise == ~stoppedWrong
 SessionAgentFixed == \A k \in Keys : active[k] # 0 => agentOf[active[k]] = convAgent[k]
 
 MentionNeverAmbient == \A m \in Mentions : ~amb[m]
+
 
 NoAmbientInReport == \A i \in Items : amb[i] => MsgThread(i) # ReportTs
 
