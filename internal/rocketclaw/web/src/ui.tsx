@@ -635,7 +635,6 @@ function useListingRings(name: string, enabled: boolean, onRing: () => void) {
   }, [name, enabled]);
 }
 
-// A server's session list. A remote that stops answering keeps its last rows, offline; only a refusal clears them.
 function ServerSessions({ children }: { children: ReactNode }) {
   const name = useContext(ServerName);
   const here = useServer() === name;
@@ -645,7 +644,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
   const local = useQuery({ ...queries.protocol(""), enabled: false }).data, foreign = protocol.data !== undefined && protocol.data !== local;
   // A remote's saved rows keep apart from the local server's, whose cache key stays as it was.
   const scope = protocol.data === undefined || !name ? protocol.data : JSON.stringify([name, protocol.data]);
-  const identityRejected = identity.isError && (!name || identity.error instanceof RPCError);
+  const identityRejected = identity.isError && identity.error instanceof RPCError;
   const unreachable = identity.isError && !identityRejected;
   const owner = identity.isSuccess || unreachable ? identity.data?.username : undefined;
   const tabs = useQuery({ ...queries.tabs(owner ?? "", name), refetchInterval: 2000, enabled: owner !== undefined && !here });
