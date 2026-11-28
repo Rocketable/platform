@@ -13,8 +13,6 @@ function snapshotEpoch(owner: string, protocol: string) {
   return `${globalEpoch}:${epochs.get(scopeKey(owner, protocol)) ?? 0}`;
 }
 
-// Identity changes, deletions and abandoned enumerations must beat in-flight
-// IndexedDB work. Network abort does not cancel an already-opened IDB request.
 export function invalidatePendingSaves(owner?: string, protocol?: string) {
   const key = owner === undefined || protocol === undefined ? undefined : scopeKey(owner, protocol);
   if (key === undefined) {
@@ -27,7 +25,6 @@ export function invalidatePendingSaves(owner?: string, protocol?: string) {
     try {
       tx.abort();
     } catch (error) {
-      // A commit may finish before its completion event reaches this task.
       if (!(error instanceof DOMException && error.name === "InvalidStateError")) throw error;
     }
   }
@@ -42,8 +39,6 @@ function openSnapshots(): Promise<IDBDatabase> {
   });
 }
 
-// Capture before opening the network enumeration, not when its rows are saved.
-// The string metadata key cannot collide with the [owner, protocol] row key.
 export async function loadSnapshotGeneration(owner: string, protocol: string): Promise<number> {
   const db = await openSnapshots();
   try {
@@ -58,12 +53,8 @@ export async function loadSnapshotGeneration(owner: string, protocol: string): P
   }
 }
 
-// A complete listing as saved: its rows as listed, the version the server named it by, the server's metadata, and the
-// attention rows of tabs that are not sessions.
 export type SavedListing = { rows: Session[]; version: string; remote?: Remote; tabs?: TabAttention[] };
 
-// The caller must confirm owner with the backend before reading saved rows.
-// IndexedDB supplies origin isolation; the key adds user and protocol isolation.
 export async function loadSavedSessions(owner: string, protocol: string): Promise<SavedListing | undefined> {
   const epoch = snapshotEpoch(owner, protocol);
   const db = await openSnapshots();
@@ -82,10 +73,8 @@ export async function loadSavedSessions(owner: string, protocol: string): Promis
   }
 }
 
-// Only a successfully exhausted, summary-complete enumeration may be saved.
-// Resolve on transaction completion: request success alone is not a commit.
 export async function saveCompleteSessions(owner: string, protocol: string, listing: SavedListing, generation: number | undefined): Promise<void> {
-  if (generation === undefined) return; // Storage was unavailable before enumeration.
+  if (generation === undefined) return;
   invalidatePendingSaves(owner, protocol);
   const epoch = snapshotEpoch(owner, protocol);
   const db = await openSnapshots();
@@ -101,8 +90,6 @@ export async function saveCompleteSessions(owner: string, protocol: string, list
       const store = tx.objectStore("snapshots");
       const request = store.get(scopeKey(owner, protocol));
       request.onsuccess = () => {
-        // Read/check/write share a transaction: a paused tab cannot overwrite
-        // a snapshot from a later generation.
         if ((request.result ?? 0) === generation) store.put(listing, [owner, protocol]);
       };
     });
@@ -118,19 +105,14 @@ export function mergeSessionRows(baseline: Session[], received: Session[]): Sess
 
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-// A listing made since the held version sends only the rows changed since and names the rows removed since, so the
-// held rows fill in the rest, in the server's order (sidebarSessions): newest updatedAt to the nanosecond, then ID.
-// Any other listing sent every row, in that order.
 export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "received" | "since" | "removed">): Session[] {
   if (result.since !== held.version) return result.received;
   const removed = new Set(result.removed);
   const rows = mergeSessionRows(held.rows, result.received).filter((row) => !removed.has(row.id));
-  // RFC 3339 times in UTC compare as text once their fractions have nine digits.
   const updated = new Map(rows.map((row) => [row, row.updatedAt?.replace(/(\.\d+)?Z$/, (_, fraction = ".") => `${fraction.padEnd(10, "0")}Z`) ?? ""]));
   return rows.sort((a, b) => compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
 }
 
-// Tab rows sent since the held version replace the held ones by location; a row with nothing set leaves.
 export function listedTabs(held: SavedListing, result: Pick<EnumerationResult, "tabs" | "since">): TabAttention[] {
   const tabs = [...result.since === held.version ? held.tabs ?? [] : [], ...result.tabs ?? []].reduce((byPath, tab) => byPath.set(tab.path, tab), new Map<string, TabAttention>());
   return [...tabs.values()].filter((tab) => tab.unreadAt || tab.parked || tab.until || tab.unfollowed);
@@ -143,21 +125,16 @@ export function searchIsAuthoritative(flags: { refreshing: boolean; enumerationC
 export type EnumerationResult = {
   received: Session[];
   complete: boolean;
-  // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
   remote?: Remote;
-  // From the completion message: the listing's version, its tab rows and, when sent since a held version, that version
-  // and the IDs removed since.
   version?: string;
   since?: string;
   removed?: string[];
   tabs?: TabAttention[];
-  // From the first message: the person's tab-state revision.
   tabRevision?: string;
   navigate?: string;
 };
 
-// onRemote receives the server's metadata from the listing's first message, before any row.
 export async function readSessionEnumeration(
   owner: string,
   batches: AsyncIterable<SessionBatch> | Promise<AsyncIterable<SessionBatch>>,
@@ -201,10 +178,6 @@ export async function readSessionEnumeration(
       const first = byID.size === 0;
       for (const row of batch.sessions) byID.set(row.id, row);
       dirty = true;
-      // First useful row is immediate; subsequent display work coalesces over
-      // 16 ms without awaiting the timer or slowing transport consumption.
-      // Full-list work remains per publication; incremental rendering is the
-      // next step if even frame-sized publications become too expensive.
       if (first && byID.size > 0) {
         cancel();
         flush();
@@ -213,7 +186,6 @@ export async function readSessionEnumeration(
     result.complete = upstreamSuccess && !result.mismatch && !signal?.aborted;
   } catch (error) {
     result.mismatch = error instanceof RPCError && error.code === 16;
-    // Retain the received prefix, but failed streams cannot promote a snapshot.
   } finally {
     cancel();
     signal?.removeEventListener("abort", cancel);
